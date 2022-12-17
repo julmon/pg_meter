@@ -1,0 +1,21 @@
+[package]
+name = "pgmtr"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+clap = { version = "4.0.18", features = ["derive", "env", "string"] }
+users = "0.11"
+postgres = "0.19.4"
+chrono = "0.4.10"
+crossbeam-channel = "0.5.6"
+urlencoding = "2.1.2"
+rand = "0.8.5"
+rust_decimal= { version = "1.27.0", features = ["serde", "db-postgres"] }
+
+#[profile.release]
+#strip = true
+#opt-level = "z"
+#lto = true
