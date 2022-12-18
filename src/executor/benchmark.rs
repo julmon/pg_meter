@@ -1,8 +1,6 @@
+use async_trait::async_trait;
 use postgres::Client;
-
-
-// Type defining a pointer to a function in charge of executing transactions
-type ExecuteBenchmarkTransaction = fn(&mut Client, i32, u32, u32) -> Result<u128, Box<dyn std::error::Error>>;
+use tokio_postgres::{Client as AsyncClient};
 
 // Transaction specifications
 pub struct BenchmarkTransaction {
@@ -12,8 +10,6 @@ pub struct BenchmarkTransaction {
     pub weight: u16,
     // Description of the transaction, useful for the report
     pub description: String,
-    // Pointer to the function in charge of executing the transaction
-    pub execute: ExecuteBenchmarkTransaction,
 }
 
 pub struct BenchmarkDDL {
@@ -21,8 +17,9 @@ pub struct BenchmarkDDL {
 }
 
 // ReadWrite trait for all benchmarks implementing read/write workload
+#[async_trait]
 pub trait ReadWrite {
-    fn execute_rw_transaction(&self, client :&mut Client, transaction :&BenchmarkTransaction) -> Result<u128, Box<dyn std::error::Error>>;
+    async fn execute_rw_transaction(&self, client :&mut AsyncClient, transaction :&BenchmarkTransaction) -> Result<u128, Box<dyn std::error::Error>>;
 }
 
 // InitializeSchema trait: tables re-creation

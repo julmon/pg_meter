@@ -3,8 +3,10 @@ use std::io::Write;
 use std::error::Error;
 use std::fmt;
 
+use async_trait::async_trait;
 use chrono::Utc;
 use postgres::Client;
+use tokio_postgres::{Client as AsyncClient};
 use rand::{distributions::Alphanumeric, Rng, seq::SliceRandom};
 use rust_decimal::prelude::*;
 
@@ -65,31 +67,26 @@ impl TPCC {
                         id: 1,
                         weight: 4,
                         description: "The Delivery transaction".to_string(),
-                        execute: TPCC::delivery,
                     },
                     BenchmarkTransaction {
                         id: 2,
                         weight: 45,
                         description: "The New-Order transaction".to_string(),
-                        execute: TPCC::new_order,
                     },
                     BenchmarkTransaction {
                         id: 3,
                         weight: 43,
                         description: "The Payment transaction".to_string(),
-                        execute: TPCC::payment,
                     },
                     BenchmarkTransaction {
                         id: 4,
                         weight: 4,
                         description: "The Order-Status transaction".to_string(),
-                        execute: TPCC::order_status,
                     },
                     BenchmarkTransaction {
                         id: 5,
                         weight: 4,
                         description: "The Stock-Level transaction".to_string(),
-                        execute: TPCC::stock_level,
                     },
                 ]
             ),
@@ -375,7 +372,7 @@ impl TPCC {
             ),
             index_ddls: Vec::from(
                 [
-                    BenchmarkDDL {
+                     BenchmarkDDL {
                         sql: "CREATE INDEX i_customer_c_last ON customer (c_last)".to_string(),
                     },
                 ]
@@ -384,13 +381,13 @@ impl TPCC {
     }
 
     // The Delivery business transaction
-    pub fn delivery(client: &mut Client, warehouse_id :i32, _start_id :u32, _end_id :u32) -> Result<u128, Box<dyn std::error::Error>> {
+    pub async fn delivery(client: &mut AsyncClient, warehouse_id :i32, _start_id :u32, _end_id :u32) -> Result<u128, Box<dyn std::error::Error>> {
         let start = Instant::now();
 
         let carrier_id :i32 = rand::thread_rng()
             .gen_range(1..=10);
 
-        let mut transaction = client.transaction()?;
+        let transaction = client.transaction().await?;
 
         for district_id in 1..=10 {
             let rows = transaction.query(r"
@@ -401,7 +398,7 @@ impl TPCC {
                     AND no_d_id = $2
                 ORDER BY no_o_id ASC
                 LIMIT 1
-                ", &[&warehouse_id, &district_id])?;
+                ", &[&warehouse_id, &district_id]).await?;
             if rows.len() > 0 {
                 let order_id: i32 = rows[0].get("no_o_id");
 
@@ -411,7 +408,7 @@ impl TPCC {
                         no_o_id = $1
                         AND no_w_id = $2
                         AND no_d_id = $3
-                ", &[&order_id, &warehouse_id, &district_id])?;
+                ", &[&order_id, &warehouse_id, &district_id]).await?;
 
                 let row_orders = transaction.query(r"
                     UPDATE orders
@@ -422,10 +419,10 @@ impl TPCC {
                         AND o_w_id = $3
                         AND o_d_id = $4
                     RETURNING o_c_id
-                ", &[&carrier_id, &order_id, &warehouse_id, &district_id])?;
+                ", &[&carrier_id, &order_id, &warehouse_id, &district_id]).await?;
 
                 if row_orders.len() == 0 {
-                    transaction.rollback()?;
+                    transaction.rollback().await?;
                     return Err(Box::new(TPCCError("Delivery transaction rollbacked. Order not found.".into())));
                 }
 
@@ -439,7 +436,7 @@ impl TPCC {
                         ol_o_id = $1
                         AND ol_w_id = $2
                         AND ol_d_id = $3
-                ", &[&order_id, &warehouse_id, &district_id])?;
+                ", &[&order_id, &warehouse_id, &district_id]).await?;
 
                 let row_amount = transaction.query(r"
                     SELECT SUM(ol_amount * ol_quantity) AS total_ol_amount
@@ -448,10 +445,10 @@ impl TPCC {
                         ol_o_id = $1
                         AND ol_w_id = $2
                         AND ol_d_id = $3
-                ", &[&order_id, &warehouse_id, &district_id])?;
+                ", &[&order_id, &warehouse_id, &district_id]).await?;
 
                 if row_amount.len() == 0 {
-                    transaction.rollback()?;
+                    transaction.rollback().await?;
                     return Err(Box::new(TPCCError("Delivery transaction rollbacked. Order-line items not found.".into())));
                 }
 
@@ -467,16 +464,16 @@ impl TPCC {
                         c_id = $2
                         AND c_w_id = $3
                         AND c_d_id = $4;
-                ", &[&total_ol_amount_dec, &customer_id, &warehouse_id, &district_id])?;
+                ", &[&total_ol_amount_dec, &customer_id, &warehouse_id, &district_id]).await?;
             }
         }
-        transaction.commit()?;
+        transaction.commit().await?;
 
         Ok(start.elapsed().as_micros())
     }
 
     // The New-Order business transaction
-    pub fn new_order(client: &mut Client, warehouse_id :i32, start_id :u32, end_id :u32) -> Result<u128, Box<dyn std::error::Error>> {
+    pub async fn new_order(client: &mut AsyncClient, warehouse_id :i32, start_id :u32, end_id :u32) -> Result<u128, Box<dyn std::error::Error>> {
         let district_id :i32 = rand::thread_rng()
             .gen_range(1..=10);
         let customer_id :i32 = rand::thread_rng()
@@ -535,11 +532,11 @@ impl TPCC {
 
         // Starting database transaction
         let start = Instant::now();
-        let mut transaction = client.transaction()?;
+        let transaction = client.transaction().await?;
 
         transaction.query(r"
             SELECT w_tax FROM warehouse WHERE w_id = $1
-        ", &[&warehouse_id])?;
+        ", &[&warehouse_id]).await?;
 
         let row_district = transaction.query(r"
              UPDATE district
@@ -548,10 +545,10 @@ impl TPCC {
                 d_w_id = $1
                 AND d_id = $2
             RETURNING d_tax, d_next_o_id AS o_id
-        ", &[&warehouse_id, &district_id])?;
+        ", &[&warehouse_id, &district_id]).await?;
 
         if row_district.len() == 0 {
-            transaction.rollback()?;
+            transaction.rollback().await?;
             return Err(Box::new(TPCCError("New-order transaction rollbacked. District not found.".into())));
         }
 
@@ -565,29 +562,29 @@ impl TPCC {
                 c_w_id = $1
                 AND c_d_id = $2
                 AND c_id = $3
-        ", &[&warehouse_id, &district_id, &customer_id])?;
+        ", &[&warehouse_id, &district_id, &customer_id]).await?;
 
         // Inserting one new row into orders and new_order
         transaction.query(r"
             INSERT INTO orders (o_id, o_d_id, o_w_id, o_c_id, o_entry_d, o_ol_cnt, o_all_local)
             VALUES ($1, $2, $3, $4, NOW(), $5, $6)
-        ", &[&o_id, &district_id, &warehouse_id, &customer_id, &ol_cnt, &ol_all_local])?;
+        ", &[&o_id, &district_id, &warehouse_id, &customer_id, &ol_cnt, &ol_all_local]).await?;
 
         transaction.query(r"
             INSERT INTO new_order (no_o_id, no_d_id, no_w_id)
             VALUES ($1, $2, $3)
-        ", &[&o_id, &district_id, &warehouse_id])?;
+        ", &[&o_id, &district_id, &warehouse_id]).await?;
 
         let stock_query = format!("SELECT s_quantity, s_dist_{:0>2} AS s_dist, s_data FROM stock WHERE s_i_id = $1 AND s_w_id = $2", district_id);
 
         for (ol_number, ol_supply_w_id, ol_quantity, ol_i_id) in order_line_data {
             let row_item = transaction.query(r"
                 SELECT i_price, i_name, i_data FROM item WHERE i_id = $1
-            ", &[&ol_i_id])?;
+            ", &[&ol_i_id]).await?;
 
             if row_item.len() == 0 {
                 // Item not found then we must rollback the transaction
-                transaction.rollback()?;
+                transaction.rollback().await?;
                 return Err(Box::new(TPCCError("New-order transaction rollbacked. Item not found.".into())));
             }
 
@@ -595,7 +592,7 @@ impl TPCC {
             let ol_amount :f32 = i_price * ol_quantity as f32;
 
             // Execute stock query
-            let row_stock = transaction.query(&stock_query, &[&ol_i_id, &ol_supply_w_id])?;
+            let row_stock = transaction.query(&stock_query, &[&ol_i_id, &ol_supply_w_id]).await?;
             let mut s_quantity :i32 = row_stock[0].get("s_quantity");
             let s_dist :String = row_stock[0].get("s_dist");
 
@@ -620,7 +617,7 @@ impl TPCC {
                 WHERE
                     s_i_id = $1
                     AND s_w_id = $2
-            ", &[&ol_i_id, &ol_supply_w_id, &s_quantity, &ol_quantity_dec, &s_remote_cnt_inc])?;
+            ", &[&ol_i_id, &ol_supply_w_id, &s_quantity, &ol_quantity_dec, &s_remote_cnt_inc]).await?;
 
             // Insert into order_line
             transaction.query(r"
@@ -631,16 +628,16 @@ impl TPCC {
                     $1, $2, $3, $4, $5, $6, $7, $8, $9
                 )
             ", &[&o_id, &district_id, &warehouse_id, &ol_number, &ol_i_id, &ol_supply_w_id,
-                 &ol_quantity, &ol_amount, &s_dist])?;
+                 &ol_quantity, &ol_amount, &s_dist]).await?;
         }
 
-        transaction.commit()?;
+        transaction.commit().await?;
 
         Ok(start.elapsed().as_micros())
     }
 
     // The Payment business transaction
-    pub fn payment(client: &mut Client, warehouse_id :i32, start_id :u32, end_id :u32) -> Result<u128, Box<dyn std::error::Error>> {
+    pub async fn payment(client: &mut AsyncClient, warehouse_id :i32, start_id :u32, end_id :u32) -> Result<u128, Box<dyn std::error::Error>> {
         let x :u8 = rand::thread_rng()
             .gen_range(1..=100);
         let y :u8 = rand::thread_rng()
@@ -688,17 +685,17 @@ impl TPCC {
 
 
         let start = Instant::now();
-        let mut transaction = client.transaction()?;
+        let transaction = client.transaction().await?;
 
         let row_warehouse = transaction.query(r"
             UPDATE warehouse
             SET w_ytd = w_ytd + $1
             WHERE w_id = $2
             RETURNING w_name, w_street_1, w_street_2, w_city, w_state, w_zip
-        ", &[&h_amount_dec, &warehouse_id])?;
+        ", &[&h_amount_dec, &warehouse_id]).await?;
 
         if row_warehouse.len() == 0 {
-            transaction.rollback()?;
+            transaction.rollback().await?;
             return Err(Box::new(TPCCError("Payment transaction rollbacked. Warehouse not found.".into())));
         }
 
@@ -711,10 +708,10 @@ impl TPCC {
                 d_w_id = $2
                 AND d_id = $3
             RETURNING d_name, d_street_1, d_street_2, d_city, d_state, d_zip
-        ", &[&h_amount_dec, &warehouse_id, &district_id])?;
+        ", &[&h_amount_dec, &warehouse_id, &district_id]).await?;
 
         if row_district.len() == 0 {
-            transaction.rollback()?;
+            transaction.rollback().await?;
             return Err(Box::new(TPCCError("Payment transaction rollbacked. District not found.".into())));
         }
 
@@ -725,10 +722,10 @@ impl TPCC {
                 SELECT c_id FROM customer
                 WHERE c_w_id = $1 AND c_d_id = $2 AND c_last = $3
                 ORDER BY c_first ASC
-            ", &[&c_w_id, &c_d_id, &c_last])?;
+            ", &[&c_w_id, &c_d_id, &c_last]).await?;
 
             if row_c_id.len() == 0 {
-                transaction.rollback()?;
+                transaction.rollback().await?;
                 return Err(Box::new(TPCCError("Payment transaction rollbacked. Customer not found (c_last).".into())));
             }
 
@@ -746,10 +743,10 @@ impl TPCC {
                 c_w_id = $1
                 AND c_d_id = $2
                 AND c_id = $3
-        ", &[&c_w_id, &c_d_id, &c_id])?;
+        ", &[&c_w_id, &c_d_id, &c_id]).await?;
 
         if row_customer.len() == 0 {
-            transaction.rollback()?;
+            transaction.rollback().await?;
             return Err(Box::new(TPCCError("Payment transaction rollbacked. Customer not found.".into())));
         }
 
@@ -765,7 +762,7 @@ impl TPCC {
                     c_data = substring($5||' '||c_data, 1, 500)
                 WHERE
                     c_id = $2 AND c_d_id = $3 AND c_w_id = $4
-            ", &[&h_amount_dec, &c_id, &c_d_id, &c_w_id, &pre_c_data])?;
+            ", &[&h_amount_dec, &c_id, &c_d_id, &c_w_id, &pre_c_data]).await?;
         }
         else {
             transaction.query(r"
@@ -775,22 +772,22 @@ impl TPCC {
                     c_ytd_payment = c_ytd_payment + 1
                 WHERE
                     c_id = $2 AND c_d_id = $3 AND c_w_id = $4
-            ", &[&h_amount_dec, &c_id, &c_d_id, &c_w_id])?;
+            ", &[&h_amount_dec, &c_id, &c_d_id, &c_w_id]).await?;
         }
         transaction.query(r"
             INSERT INTO history
                 (h_c_id, h_c_d_id, h_c_w_id, h_d_id, h_w_id, h_date, h_amount, h_data)
             VALUES
                 ($1, $2, $3, $4, $5, NOW(), $6, substring($7||'    '||$8, 1, 24))
-        ", &[&c_id, &c_d_id, &c_w_id, &district_id, &warehouse_id, &h_amount, &w_name, &d_name])?;
+        ", &[&c_id, &c_d_id, &c_w_id, &district_id, &warehouse_id, &h_amount, &w_name, &d_name]).await?;
 
-        transaction.commit()?;
+        transaction.commit().await?;
 
         Ok(start.elapsed().as_micros())
     }
 
     // The Order-Status business transaction
-    pub fn order_status(client: &mut Client, warehouse_id :i32, _start_id :u32, _end_id :u32) -> Result<u128, Box<dyn std::error::Error>> {
+    pub async fn order_status(client: &mut AsyncClient, warehouse_id :i32, _start_id :u32, _end_id :u32) -> Result<u128, Box<dyn std::error::Error>> {
         let y :u8 = rand::thread_rng()
             .gen_range(1..=100);
 
@@ -808,17 +805,17 @@ impl TPCC {
         }
 
         let start = Instant::now();
-        let mut transaction = client.transaction()?;
+        let transaction = client.transaction().await?;
 
         if y <= 60 {
             let row_c_id = transaction.query(r"
                 SELECT c_id FROM customer
                 WHERE c_w_id = $1 AND c_d_id = $2 AND c_last = $3
                 ORDER BY c_first ASC
-            ", &[&warehouse_id, &district_id, &c_last])?;
+            ", &[&warehouse_id, &district_id, &c_last]).await?;
 
             if row_c_id.len() == 0 {
-                transaction.rollback()?;
+                transaction.rollback().await?;
                 return Err(Box::new(TPCCError("Order-Status transaction rollbacked. Customer not found (c_last).".into())));
             }
 
@@ -834,7 +831,7 @@ impl TPCC {
                 c_w_id = $1
                 AND c_d_id = $2
                 AND c_id = $3
-        ", &[&warehouse_id, &district_id, &c_id])?;
+        ", &[&warehouse_id, &district_id, &c_id]).await?;
 
         let row_order = transaction.query(r"
             SELECT
@@ -845,10 +842,10 @@ impl TPCC {
                 AND o_d_id = $2
                 AND o_c_id = $3
             ORDER BY o_entry_d DESC LIMIT 1
-        ", &[&warehouse_id, &district_id, &c_id])?;
+        ", &[&warehouse_id, &district_id, &c_id]).await?;
 
         if row_order.len() == 0 {
-            transaction.rollback()?;
+            transaction.rollback().await?;
             return Err(Box::new(TPCCError("Order-Status transaction rollbacked. Order not found.".into())));
         }
 
@@ -862,30 +859,29 @@ impl TPCC {
                 ol_w_id = $1
                 AND ol_d_id = $2
                 AND ol_o_id = $3
-        ", &[&warehouse_id, &district_id, &o_id])?;
+        ", &[&warehouse_id, &district_id, &o_id]).await?;
 
-        transaction.commit()?;
+        transaction.commit().await?;
         Ok(start.elapsed().as_micros())
     }
 
-    pub fn stock_level(client: &mut Client, warehouse_id :i32, _start_id :u32, _end_id :u32) -> Result<u128, Box<dyn std::error::Error>> {
-
+    pub async fn stock_level(client: &mut AsyncClient, warehouse_id :i32, _start_id :u32, _end_id :u32) -> Result<u128, Box<dyn std::error::Error>> {
         let district_id :i32 = rand::thread_rng()
             .gen_range(1..=10);
         let threshold :i32 = rand::thread_rng()
             .gen_range(10..=20);
 
         let start = Instant::now();
-        let mut transaction = client.transaction()?;
+        let transaction = client.transaction().await?;
 
         let row_district = transaction.query(r"
             SELECT d_next_o_id
             FROM district
             WHERE d_w_id = $1 AND d_id = $2
-        ", &[&warehouse_id, &district_id])?;
+        ", &[&warehouse_id, &district_id]).await?;
 
         if row_district.len() == 0 {
-            transaction.rollback()?;
+            transaction.rollback().await?;
             return Err(Box::new(TPCCError("Stock-Level transaction rollbacked. District not found.".into())));
         }
 
@@ -900,7 +896,7 @@ impl TPCC {
                 AND ol_d_id = $2
                 AND ol_o_id < $3
                 AND ol_o_id >= ($3 - 20)
-        ", &[&warehouse_id, &district_id, &d_next_o_id])?;
+        ", &[&warehouse_id, &district_id, &d_next_o_id]).await?;
 
         for row in rows_order_line {
             let ol_i_id :i32 = row.get("ol_i_id");
@@ -911,10 +907,10 @@ impl TPCC {
                     s_w_id = $1
                     AND s_i_id = $2
                     AND s_quantity < $3
-            ", &[&warehouse_id, &ol_i_id, &threshold])?;
+            ", &[&warehouse_id, &ol_i_id, &threshold]).await?;
         }
 
-        transaction.commit()?;
+        transaction.commit().await?;
         Ok(start.elapsed().as_micros())
     }
 
@@ -1511,17 +1507,47 @@ impl TPCC {
     }
 }
 
+#[async_trait]
 impl ReadWrite for TPCC {
-    fn execute_rw_transaction(&self, client :&mut Client, transaction :&BenchmarkTransaction) -> Result<u128, Box<dyn std::error::Error>> {
+    async fn execute_rw_transaction(&self, client :&mut AsyncClient, transaction :&BenchmarkTransaction) -> Result<u128, Box<dyn std::error::Error>> {
         // Generate the warehouse id we are going to hit
         // The used type is i32 because it matches with Postgres' int4 type.
         let warehouse_id :i32 = rand::thread_rng()
             .gen_range(self.start_id..=self.end_id) as i32;
 
-        match (transaction.execute)(client, warehouse_id, self.start_id, self.end_id) {
-            Ok(duration) => return Ok(duration),
-            Err(e) => return Err(Box::new(TPCCError(e.to_string()))),
-        }
+        match transaction.id {
+            1 => {
+                match TPCC::delivery(client, warehouse_id, self.start_id, self.end_id).await {
+                    Ok(duration) => return Ok(duration),
+                    Err(e) => return Err(Box::new(TPCCError(e.to_string()))),
+                }
+            },
+            2 => {
+                match TPCC::new_order(client, warehouse_id, self.start_id, self.end_id).await {
+                    Ok(duration) => return Ok(duration),
+                    Err(e) => return Err(Box::new(TPCCError(e.to_string()))),
+                }
+            },
+            3 => {
+                match TPCC::payment(client, warehouse_id, self.start_id, self.end_id).await {
+                    Ok(duration) => return Ok(duration),
+                    Err(e) => return Err(Box::new(TPCCError(e.to_string()))),
+                }
+            },
+            4 => {
+                match TPCC::order_status(client, warehouse_id, self.start_id, self.end_id).await {
+                    Ok(duration) => return Ok(duration),
+                    Err(e) => return Err(Box::new(TPCCError(e.to_string()))),
+                }
+            },
+            5 => {
+                match TPCC::stock_level(client, warehouse_id, self.start_id, self.end_id).await {
+                    Ok(duration) => return Ok(duration),
+                    Err(e) => return Err(Box::new(TPCCError(e.to_string()))),
+                }
+            },
+            0 | 6..=u16::MAX => todo!(),
+        };
     }
 }
 

@@ -6,10 +6,12 @@ use std::io::prelude::*;
 use std::io::LineWriter;
 use std::collections::HashMap;
 
+use chrono::Utc;
 use crossbeam_channel::{Sender, Receiver, unbounded};
 use postgres::{Client, NoTls};
 use rand::prelude::*;
-use chrono::Utc;
+use tokio::runtime::Runtime;
+use tokio_postgres::{NoTls as AsyncNoTls};
 
 mod benchmark;
 mod txmessage;
@@ -68,26 +70,30 @@ impl Executor {
         println!("Rampup duration (s): {}", args.rampup);
         println!("Starting {} client(s) ...", args.client);
 
-        // Start the clients
-        for n in 1..=args.client {
-            // Test duration calculated by taking in consideration the rampup time and the
-            // remaining duration before the end of rampup stage.
-            let duration_ms = time_ms + rampup_ms - n as u64 * sleep_ms;
+        // Create the tokio runtime
+        let rt = Runtime::new().unwrap();
 
-            // Sleep accordingly to the rampup time and the number of clients
-            sleep(Duration::from_millis(sleep_ms));
+        rt.block_on(async {
+            // Start the clients
+            for n in 1..=args.client {
+                // Test duration calculated by taking in consideration the rampup time and the
+                // remaining duration before the end of rampup stage.
+                let duration_ms = time_ms + rampup_ms - n as u64 * sleep_ms;
 
-            // Start one new client
-            let benchmark_client = self.start_rw_client(duration_ms, self.dsn.clone(), args.scalefactor.clone(), args.start_id.clone(), args.end_id.clone(), tx.clone());
+                // Sleep accordingly to the rampup time and the number of clients
+                sleep(Duration::from_millis(sleep_ms));
 
-            benchmark_clients.push(benchmark_client);
-        }
-        println!("All clients started, running the workload for {} s ...", args.time);
+                // Start one new client
+                let benchmark_client = self.start_rw_client(duration_ms, self.dsn.clone(), args.scalefactor.clone(), args.start_id.clone(), args.end_id.clone(), tx.clone()).await;
 
-        for benchmark_client in benchmark_clients {
-            benchmark_client.join().expect("the client thread panicked");
-        }
+                benchmark_clients.push(benchmark_client);
+            }
+            println!("All clients started, running the workload for {} s ...", args.time);
 
+            for benchmark_client in benchmark_clients {
+                benchmark_client.await.expect("the client thread panicked");
+            }
+        });
         // Proceed total execution time
         self.total_time_ms = start.elapsed().as_millis();
 
@@ -124,13 +130,29 @@ impl Executor {
     }
 
     // Start a new read/write benchmark client in its own thread
-    fn start_rw_client(&mut self, duration_ms: u64, dsn: String, scalefactor: u32, start_id: u32, end_id: u32, tx: Sender<TXMessage>) -> JoinHandle<()>
+    async fn start_rw_client(&mut self, duration_ms: u64, dsn: String, scalefactor: u32, start_id: u32, end_id: u32, tx: Sender<TXMessage>) -> tokio::task::JoinHandle<()>
     {
         let benchmark_type = self.benchmark_type.clone();
 
-        thread::spawn(move || {
+        tokio::spawn(async move  {
             // New database connection
-            let mut client = Executor::connect(dsn);
+            let (mut client, connection) = match tokio_postgres::connect(&dsn, AsyncNoTls).await {
+                Ok((client, connection)) => (client, connection),
+                Err(error) => {
+                    eprintln!("ERROR: {}", error);
+                    std::process::exit(1);
+                }
+            };
+
+            // The connection object performs the actual communication with the database,
+            // so spawn it off to run on its own.
+            tokio::spawn(async move {
+                if let Err(e) = connection.await {
+                    eprintln!("ERROR: {}", e);
+                    std::process::exit(1);
+                }
+            });
+
             // Used for tracking client execution time
             let start = Instant::now();
             // Create a new benchmark object by thread because we don't want to share a such
@@ -140,16 +162,17 @@ impl Executor {
                 _ => tpcc::TPCC::new(scalefactor, start_id, end_id),
             };
 
-            let mut rng = thread_rng();
 
             loop {
                 // Pickup a transaction, randomly and weight based.
-                let transaction = benchmark_client
-                    .transactions_rw
-                    .choose_weighted(&mut rng, |item| item.weight).unwrap();
-
+                let transaction = {
+                    let mut rng = thread_rng();
+                    benchmark_client
+                        .transactions_rw
+                        .choose_weighted(&mut rng, |item| item.weight).unwrap()
+                };
                 // Execute the database transactions
-                match benchmark_client.execute_rw_transaction(&mut client, &transaction) {
+                match benchmark_client.execute_rw_transaction(&mut client, &transaction).await {
                     Ok(duration) => {
                         // Send committed message
                         let m = TXMessage::committed(transaction.id, Utc::now().timestamp(), duration);
@@ -161,7 +184,6 @@ impl Executor {
                         tx.send(m).unwrap();
                     },
                 }
-
                 // Break the loop if we reach the time limit
                 if start.elapsed().as_millis() >= duration_ms.into() {
                     break;
