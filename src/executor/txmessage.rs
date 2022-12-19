@@ -3,6 +3,7 @@ pub enum TXMessageKind {
     COMMITTED,
     ERROR,
     TERMINATE,
+    ENDOFRAMPUP,
 }
 
 pub struct TXMessage {
@@ -47,6 +48,13 @@ impl TXMessage {
         m.tx_id = tx_id;
         m.tx_timestamp = tx_timestamp;
         m.tx_duration_us = tx_duration_us;
+
+        m
+    }
+
+    pub fn end_of_rampup() -> TXMessage {
+        let mut m = Self::default();
+        m.kind = TXMessageKind::ENDOFRAMPUP;
 
         m
     }

@@ -38,12 +38,19 @@ pub struct Executor {
     dsn: String,
     benchmark_type: String,
     counters: HashMap<u16, Counter>,
+    rampup_time_ms: u128,
     total_time_ms: u128,
 }
 
 impl Executor {
     pub fn new(dsn: String, benchmark_type: String) -> Executor {
-        Executor { dsn: dsn, benchmark_type: benchmark_type, counters: HashMap::new(), total_time_ms: 0 }
+        Executor {
+            dsn: dsn,
+            benchmark_type: benchmark_type,
+            counters: HashMap::new(),
+            total_time_ms: 0,
+            rampup_time_ms: 0
+        }
     }
 
     // Execute read/write mixed workload
@@ -90,6 +97,10 @@ impl Executor {
             }
             println!("All clients started, running the workload for {} s ...", args.time);
 
+            // Send end-of-rampup message to the data collector
+            tx.send(TXMessage::end_of_rampup()).unwrap();
+            self.rampup_time_ms = start.elapsed().as_millis();
+
             for benchmark_client in benchmark_clients {
                 benchmark_client.await.expect("the client thread panicked");
             }
@@ -110,7 +121,7 @@ impl Executor {
 
     // Prints benchmark results
     pub fn print_results(&mut self) -> &mut Self {
-        let duration = Duration::from_millis(self.total_time_ms as u64);
+        let duration = Duration::from_millis((self.total_time_ms - self.rampup_time_ms) as u64);
 
         println!("");
         println!("Benchmark results:");
@@ -162,7 +173,6 @@ impl Executor {
                 _ => tpcc::TPCC::new(scalefactor, start_id, end_id),
             };
 
-
             loop {
                 // Pickup a transaction, randomly and weight based.
                 let transaction = {
@@ -208,6 +218,7 @@ impl Executor {
             };
             let mut log_file = LineWriter::new(log_file);
 
+            // Create the error log file
             let error_file = match File::create(&error_file_path) {
                 Ok(f) => f,
                 Err(e) => {
@@ -219,6 +230,8 @@ impl Executor {
 
             // Initialize the counters
             let mut counters: HashMap<u16, Counter> = HashMap::new();
+
+            let mut ramping_up :bool = true;
 
             loop {
                 // Wait for a new message coming from the clients
@@ -232,15 +245,18 @@ impl Executor {
                     },
                     // Committed transaction
                     TXMessageKind::COMMITTED => {
-                        // Counters calculation
                         let duration_ms = msg.tx_duration_us as f64 / 1000 as f64;
-                        if let Some(c) = counters.get_mut(&msg.tx_id) {
-                            (*c).n_commits += 1;
-                            (*c).n_total += 1;
-                            (*c).total_duration_ms += duration_ms;
-                        }
-                        else {
-                            counters.insert(msg.tx_id, Counter {n_commits: 1, n_total: 1, total_duration_ms: duration_ms});
+                        // Counters calculation
+                        // Update counters only if the rampup stage is over
+                        if !ramping_up {
+                            if let Some(c) = counters.get_mut(&msg.tx_id) {
+                                (*c).n_commits += 1;
+                                (*c).n_total += 1;
+                                (*c).total_duration_ms += duration_ms;
+                            }
+                            else {
+                                counters.insert(msg.tx_id, Counter {n_commits: 1, n_total: 1, total_duration_ms: duration_ms});
+                            }
                         }
 
                         // Format and write the line to the log file
@@ -249,16 +265,21 @@ impl Executor {
                     },
                     TXMessageKind::ERROR => {
                         // Counters calculation
-                        if let Some(c) = counters.get_mut(&msg.tx_id) {
-                            (*c).n_total += 1;
-                        }
-                        else {
-                            counters.insert(msg.tx_id, Counter {n_commits: 0, n_total: 1, total_duration_ms: 0.0});
+                        if !ramping_up {
+                            if let Some(c) = counters.get_mut(&msg.tx_id) {
+                                (*c).n_total += 1;
+                            }
+                            else {
+                                counters.insert(msg.tx_id, Counter {n_commits: 0, n_total: 1, total_duration_ms: 0.0});
+                            }
                         }
 
                         // Format and write the line to the log file
                         let line = format!("{} {} {}\n", msg.tx_timestamp, msg.tx_id, msg.error);
                         error_file.write_all(line.as_bytes()).expect("Failed to write");
+                    },
+                    TXMessageKind::ENDOFRAMPUP => {
+                        ramping_up = false;
                     },
                     TXMessageKind::DEFAULT => {
                         // Should not happen
