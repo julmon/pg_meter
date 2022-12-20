@@ -17,6 +17,7 @@ rust_decimal= { version = "1.27.0", features = ["serde", "db-postgres"] }
 tokio = { version = "1", features = ["full"] }
 tokio-postgres = "0.7.7"
 async-trait = "0.1.59"
+console = "0.15.2"
 
 #[profile.release]
 #strip = true
