@@ -1,3 +1,6 @@
+use std::collections::HashMap;
+use std::time::Duration;
+
 use async_trait::async_trait;
 use postgres::Client;
 use tokio_postgres::{Client as AsyncClient};
@@ -10,6 +13,13 @@ pub struct BenchmarkTransaction {
     pub weight: u16,
     // Description of the transaction, useful for the report
     pub description: String,
+}
+
+#[derive(Clone)]
+pub struct Counter {
+    pub n_commits: u64,
+    pub n_total: u64,
+    pub total_duration_ms: f64,
 }
 
 pub struct BenchmarkDDL {
@@ -47,4 +57,8 @@ pub trait AddForeignKeys {
 
 pub trait AddIndexes {
     fn add_indexes(&self, client: &mut Client, ddls: Vec<String>) -> Result<u128, postgres::Error>;
+}
+
+pub trait PrintResultsSummary {
+    fn print_results_summary(&self, counters: HashMap<u16, Counter>, duration_ms: Duration);
 }

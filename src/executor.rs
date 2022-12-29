@@ -21,19 +21,15 @@ mod terminal;
 use benchmark::{
     AddPrimaryKeys,
     AddForeignKeys,
+    Counter,
     InitializeSchema,
     LoadData,
     PreLoadData,
+    PrintResultsSummary,
     ReadWrite,
 };
 use txmessage::{TXMessage, TXMessageKind};
 use super::args::{RunArgs};
-
-pub struct Counter {
-    n_commits: u64,
-    n_total: u64,
-    total_duration_ms: f64,
-}
 
 pub struct Executor {
     dsn: String,
@@ -75,8 +71,9 @@ impl Executor {
         // Track total execution time in ms
         let start = Instant::now();
 
-        println!("Rampup duration (s): {}", args.rampup);
-        println!("Starting {} client(s) ...", args.client);
+        let command = "RUN";
+        let message = format!("Starting {} client(s) in {} seconds", args.client, args.rampup);
+        terminal::start_msg(command, message.as_str());
 
         // Create the tokio runtime
         let rt = Runtime::new().unwrap();
@@ -96,7 +93,12 @@ impl Executor {
 
                 benchmark_clients.push(benchmark_client);
             }
-            println!("All clients started, running the workload for {} s ...", args.time);
+            // All clients have been started
+            terminal::done_msg(start.elapsed().as_micros() as f64 / 1000 as f64);
+
+            let message2 = format!("Running the workload for {} seconds", args.time);
+            terminal::start_msg(command, message2.as_str());
+            let start2 = Instant::now();
 
             // Send end-of-rampup message to the data collector
             tx.send(TXMessage::end_of_rampup()).unwrap();
@@ -105,7 +107,10 @@ impl Executor {
             for benchmark_client in benchmark_clients {
                 benchmark_client.await.expect("the client thread panicked");
             }
+
+            terminal::done_msg(start2.elapsed().as_micros() as f64 / 1000 as f64);
         });
+
         // Proceed total execution time
         self.total_time_ms = start.elapsed().as_millis();
 
@@ -122,21 +127,14 @@ impl Executor {
 
     // Prints benchmark results
     pub fn print_results(&mut self) -> &mut Self {
-        let duration = Duration::from_millis((self.total_time_ms - self.rampup_time_ms) as u64);
+        let duration_ms = Duration::from_millis((self.total_time_ms - self.rampup_time_ms) as u64);
+        // Load the corresponding benchmark
+        let benchmark = match self.benchmark_type.as_str() {
+            "tpcc" => tpcc::TPCC::new(0, 0, 0),
+            _ => tpcc::TPCC::new(0, 0, 0),
+        };
 
-        println!("");
-        println!("Benchmark results:");
-        for id in self.counters.keys() {
-            if let Some(c) = self.counters.get(id) {
-                println!("------------------------------------------");
-                println!("-> Transaction {}: {}", id, (*c).n_commits);
-                println!("-> Errors: {}", ((*c).n_total - (*c).n_commits));
-                println!("-> Average response time (ms): {:.3}", ((*c).total_duration_ms / (*c).n_commits as f64));
-                println!("-> Duration (s): {:.3}", duration.as_secs_f64());
-                println!("-> Transaction Per Second rate: {:.3} TPS", (*c).n_commits as f64 / duration.as_secs() as f64);
-            }
-
-        }
+        benchmark.print_results_summary(self.counters.clone(), duration_ms);
 
         self
     }
@@ -302,7 +300,6 @@ impl Executor {
 
     // Initialize database schemabenchmark: create tables
     pub fn init_db_schema(&mut self) -> &mut Self {
-
         let command = "INIT";
         let message = "Executing database DDLs";
 

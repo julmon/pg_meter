@@ -1,11 +1,21 @@
-use std::time::Instant;
-use std::io::Write;
+use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
+use std::io::Write;
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use chrono::Utc;
+use itertools::Itertools;
 use postgres::Client;
+use tabled::{
+    object::{Rows, Object, Columns},
+    Alignment,
+    ModifyObject,
+    Style,
+    Table,
+    Tabled
+};
 use tokio_postgres::{Client as AsyncClient};
 use rand::{distributions::Alphanumeric, Rng, seq::SliceRandom};
 use rust_decimal::prelude::*;
@@ -14,11 +24,13 @@ use super::benchmark::{
     AddIndexes,
     AddPrimaryKeys,
     AddForeignKeys,
+    Counter,
     BenchmarkDDL,
     BenchmarkTransaction,
     InitializeSchema,
     LoadData,
     PreLoadData,
+    PrintResultsSummary,
     ReadWrite,
 };
 
@@ -39,6 +51,29 @@ pub struct TPCC {
     pub fkey_ddls: Vec<BenchmarkDDL>,
     // Additional index DDLs
     pub index_ddls: Vec<BenchmarkDDL>,
+}
+
+#[derive(Tabled)]
+pub struct TPCCTransactionSummary {
+    description: String,
+    n_commits: u64,
+    n_errors: u64,
+    error_rate: f64,
+    avg_response_time_ms: f64,
+    tpm_c: u32,
+}
+
+impl TPCCTransactionSummary {
+    pub fn new(description: String, n_commits: u64, n_errors: u64, error_rate: f64, avg_response_time_ms: f64, tpm_c: u32) -> TPCCTransactionSummary {
+        TPCCTransactionSummary {
+            description: description,
+            n_commits: n_commits,
+            n_errors: n_errors,
+            error_rate: error_rate,
+            avg_response_time_ms: avg_response_time_ms,
+            tpm_c: tpm_c,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -378,6 +413,17 @@ impl TPCC {
                 ]
             )
         }
+    }
+
+    // Returns the transaction description for a given id
+    pub fn get_transaction_description(&self, id: u16) -> String {
+        for t in &self.transactions_rw {
+            if t.id == id {
+                return t.description.clone();
+            }
+        }
+
+        "Description not found".to_string()
     }
 
     // The Delivery business transaction
@@ -1638,5 +1684,71 @@ impl AddIndexes for TPCC {
         }
 
         Ok(start.elapsed().as_micros())
+    }
+}
+
+impl PrintResultsSummary for TPCC {
+    fn print_results_summary(&self, counters: HashMap<u16, Counter>, duration_ms: Duration) {
+        println!("");
+        println!("Benchmark results:");
+        let mut data = Vec::new();
+        for id in counters.keys().sorted() {
+            if let Some(c) = counters.get(id) {
+                data.push(
+                    TPCCTransactionSummary::new(
+                        self.get_transaction_description(*id),
+                        (*c).n_commits,
+                        (*c).n_total - (*c).n_commits,
+                        ((*c).n_total - (*c).n_commits) as f64 / (*c).n_total as f64 * 100.0,
+                        (*c).total_duration_ms / (*c).n_commits as f64,
+                        ((*c).n_commits as f64 / duration_ms.as_secs() as f64 * 60.0) as u32
+                    )
+                );
+            }
+        }
+        let mut table = Table::from_iter(&data);
+        let style = Style::rounded();
+        table
+            .with(style)
+            .with(
+                Rows::first()
+                    .modify()
+                    .with(Alignment::center())
+            )
+            .with(
+                Columns::single(1)
+                    .not(Rows::first())
+                    .modify()
+                    .with(Alignment::right())
+            )
+            .with(
+                Columns::single(2)
+                    .not(Rows::first())
+                    .modify()
+                    .with(Alignment::right())
+            )
+            .with(
+                Columns::single(3)
+                    .not(Rows::first())
+                    .modify()
+                    .with(|s: &str| format!("{val:.*} %", 3,  val=s.parse::<f64>().unwrap()))
+                    .with(Alignment::right())
+            )
+            .with(
+                Columns::single(4)
+                    .not(Rows::first())
+                    .modify()
+                    .with(|s: &str| format!("{val:.*} ms", 3, val=s.parse::<f64>().unwrap()))
+                    .with(Alignment::right())
+            )
+            .with(
+                Columns::single(5)
+                    .not(Rows::first())
+                    .modify()
+                    .with(|s: &str| format!("{}", s.parse::<u32>().unwrap()))
+                    .with(Alignment::right())
+            );
+
+        println!("{}", table);
     }
 }
