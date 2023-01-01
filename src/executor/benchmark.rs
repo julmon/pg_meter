@@ -62,3 +62,7 @@ pub trait AddIndexes {
 pub trait PrintResultsSummary {
     fn print_results_summary(&self, counters: HashMap<u16, Counter>, duration_ms: Duration);
 }
+
+pub trait GetDefaultMaxId {
+    fn get_default_max_id(&self, client: &mut Client) -> Result<u32, postgres::Error>;
+}

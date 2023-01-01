@@ -16,9 +16,11 @@ pub struct RunArgs {
     pub time: u16,
     // Rampup duration, in second
     pub rampup: u16,
-    pub scalefactor: u32,
-    pub start_id: u32,
-    pub end_id: u32,
+    // Minimum object ID value we want to hit during the benchmark. In TPCC context, the object ID is a warehouse id.
+    // min_id and max_id define the target object interval.
+    pub min_id: u32,
+    // Max object ID value
+    pub max_id: u32,
 }
 
 // init sub-command arguments
@@ -54,7 +56,7 @@ pub struct PgMtrArgs {
 // Implementation of RunArgs::empty()
 impl RunArgs {
     fn empty() -> Self {
-        RunArgs {client: 0, time: 0, rampup: 0, scalefactor: 0, start_id: 0, end_id: 0}
+        RunArgs {client: 0, time: 0, rampup: 0, min_id: 0, max_id: 0}
     }
 }
 
@@ -186,33 +188,23 @@ impl PgMtrArgs {
             .value_name("NUM")
             .default_value("0");
 
-        // run: Define the --scalefactor/-s command line option
-        let run_scalefactor_option = Arg::new("scalefactor")
-            .long("scalefactor") // allow --scalefactor
+        // run: Define the --min-id command line option
+        let min_id_option = Arg::new("min_id")
+            .long("min-id") // allow --min-id
             .action(ArgAction::Set)
-            .short('s') // allow -s
-            .help("Database scale factor")
+            .help("Interval's minimum ID value")
             .required(false)
             .value_name("NUM")
             .default_value("1");
 
-        // run: Define the --start-id command line option
-        let start_id_option = Arg::new("start_id")
-            .long("start-id") // allow --start-id
+        // run: Define the --max-id command line option
+        let max_id_option = Arg::new("max_id")
+            .long("max-id") // allow --max-id
             .action(ArgAction::Set)
-            .help("Interval's starting identifier")
+            .help("Interval's maximum ID value. If set to 0, the value is automatically based on the scalefactor.")
             .required(false)
             .value_name("NUM")
-            .default_value("1");
-
-        // run: Define the --end-id command line option
-        let end_id_option = Arg::new("end_id")
-            .long("end-id") // allow --end-id
-            .action(ArgAction::Set)
-            .help("Interval's ending identifier")
-            .required(false)
-            .value_name("NUM")
-            .default_value("1");
+            .default_value("0");
 
         // init: Define the --scalefactor/-s command line option
         let scalefactor_option = Arg::new("scalefactor")
@@ -241,9 +233,8 @@ impl PgMtrArgs {
             .arg(client_option)
             .arg(time_option)
             .arg(rampup_option)
-            .arg(run_scalefactor_option)
-            .arg(start_id_option)
-            .arg(end_id_option);
+            .arg(min_id_option)
+            .arg(max_id_option);
 
         // init tpcc <OPTIONS>
         let init_tpcc = Command::new("tpcc")
@@ -337,7 +328,7 @@ impl PgMtrArgs {
                 let run_m = matches.subcommand_matches("run").unwrap();
                 let (run_args, init_args, benchmark_type) = match run_m.subcommand_name() {
                     Some("tpcc") => {
-                        let (client, time, rampup, scalefactor, start_id, end_id) = match run_m.subcommand_matches("tpcc") {
+                        let (client, time, rampup, min_id, max_id) = match run_m.subcommand_matches("tpcc") {
                             Some(tpcc_m) => {
                                 let client_str = tpcc_m
                                     .get_one::<String>("client")
@@ -348,14 +339,11 @@ impl PgMtrArgs {
                                 let rampup_str = tpcc_m
                                     .get_one::<String>("rampup")
                                     .unwrap();
-                                let scalefactor_str = tpcc_m
-                                    .get_one::<String>("scalefactor")
+                                let min_id_str = tpcc_m
+                                    .get_one::<String>("min_id")
                                     .unwrap();
-                                let start_id_str = tpcc_m
-                                    .get_one::<String>("start_id")
-                                    .unwrap();
-                                let end_id_str = tpcc_m
-                                    .get_one::<String>("end_id")
+                                let max_id_str = tpcc_m
+                                    .get_one::<String>("max_id")
                                     .unwrap();
                                 // Convert client to u16
                                 let client = parse_string_arg_to_u16(client_str, "invalid client number".to_string())?;
@@ -363,19 +351,17 @@ impl PgMtrArgs {
                                 let time = parse_string_arg_to_u16(time_str, "invalid time value".to_string())?;
                                 // Convert rampup to u16
                                 let rampup = parse_string_arg_to_u16(rampup_str, "invalid rampup value".to_string())?;
-                                // Convert scalefactor to u32
-                                let scalefactor = parse_string_arg_to_u32(scalefactor_str, "invalid scalefactor value".to_string())?;
-                                // Convert start_id to u32
-                                let start_id = parse_string_arg_to_u32(start_id_str, "invalid start id value".to_string())?;
-                                // Convert end_id to u32
-                                let end_id = parse_string_arg_to_u32(end_id_str, "invalid end id value".to_string())?;
+                                // Convert min_id to u32
+                                let min_id = parse_string_arg_to_u32(min_id_str, "invalid min ID value".to_string())?;
+                                // Convert max_id to u32
+                                let max_id = parse_string_arg_to_u32(max_id_str, "invalid end id value".to_string())?;
 
-                                (client, time, rampup, scalefactor, start_id, end_id)
+                                (client, time, rampup, min_id, max_id)
                             },
-                            _ => (0, 0, 0, 0, 0, 0),
+                            _ => (0, 0, 0, 0, 0),
                         };
 
-                        (RunArgs {client: client, time: time, rampup: rampup, scalefactor: scalefactor, start_id: start_id, end_id: end_id}, InitArgs::empty(), "tpcc".to_string())
+                        (RunArgs {client: client, time: time, rampup: rampup, min_id: min_id, max_id: max_id}, InitArgs::empty(), "tpcc".to_string())
                     },
                     _ => (RunArgs::empty(), InitArgs::empty(), "undefined".to_string()),
                 };
