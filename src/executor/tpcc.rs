@@ -24,9 +24,10 @@ use super::benchmark::{
     AddIndexes,
     AddPrimaryKeys,
     AddForeignKeys,
-    Counter,
     BenchmarkDDL,
     BenchmarkTransaction,
+    Counter,
+    GetDefaultMaxId,
     InitializeSchema,
     LoadData,
     PreLoadData,
@@ -1750,5 +1751,14 @@ impl PrintResultsSummary for TPCC {
             );
 
         println!("{}", table);
+    }
+}
+
+impl GetDefaultMaxId for TPCC {
+    fn get_default_max_id(&self, client: &mut Client) -> Result<u32, postgres::Error> {
+        let row_max_w_id = client.query(r"SELECT MAX(w_id) AS max_w_id FROM warehouse", &[])?;
+        let max_w_id :i32 = row_max_w_id[0].get("max_w_id");
+
+        Ok(max_w_id as u32)
     }
 }

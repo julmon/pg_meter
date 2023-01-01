@@ -22,6 +22,7 @@ use benchmark::{
     AddPrimaryKeys,
     AddForeignKeys,
     Counter,
+    GetDefaultMaxId,
     InitializeSchema,
     LoadData,
     PreLoadData,
@@ -67,11 +68,35 @@ impl Executor {
         // Start data collector
         let dc_tx_counters = tx_counters.clone();
         let data_collector = self.start_data_collector("transaction.log".to_string(), "error.log".to_string(), rx, dc_tx_counters);
-
         // Track total execution time in ms
         let start = Instant::now();
-
         let command = "RUN";
+
+        // Let's find the maximum object id if --max-id is set to 0 (default behavior)
+        let max_id :u32 = match args.max_id {
+            0 => {
+                terminal::start_msg(command, "Fetching maximum ID value");
+                // New database connection
+                let mut client = Executor::connect(self.dsn.clone());
+                let benchmark_client = match self.benchmark_type.as_str() {
+                    "tpcc" => tpcc::TPCC::new(0, 0, 0),
+                    _ => tpcc::TPCC::new(0, 0, 0),
+                };
+
+                let max_id = match benchmark_client.get_default_max_id(&mut client) {
+                    Ok(max_id) => max_id,
+                    Err(error) => {
+                        terminal::err_msg(format!("{}", error).as_str());
+                        std::process::exit(1);
+                    }
+                };
+                terminal::done_msg(start.elapsed().as_micros() as f64 / 1000 as f64);
+
+                max_id
+            },
+            _default => args.max_id.clone(),
+        };
+
         let message = format!("Starting {} client(s) in {} seconds", args.client, args.rampup);
         terminal::start_msg(command, message.as_str());
 
@@ -89,7 +114,7 @@ impl Executor {
                 sleep(Duration::from_millis(sleep_ms));
 
                 // Start one new client
-                let benchmark_client = self.start_rw_client(duration_ms, self.dsn.clone(), args.scalefactor.clone(), args.start_id.clone(), args.end_id.clone(), tx.clone()).await;
+                let benchmark_client = self.start_rw_client(duration_ms, self.dsn.clone(), args.min_id.clone(), max_id.clone(), tx.clone()).await;
 
                 benchmark_clients.push(benchmark_client);
             }
@@ -140,7 +165,7 @@ impl Executor {
     }
 
     // Start a new read/write benchmark client in its own thread
-    async fn start_rw_client(&mut self, duration_ms: u64, dsn: String, scalefactor: u32, start_id: u32, end_id: u32, tx: Sender<TXMessage>) -> tokio::task::JoinHandle<()>
+    async fn start_rw_client(&mut self, duration_ms: u64, dsn: String, min_id: u32, max_id: u32, tx: Sender<TXMessage>) -> tokio::task::JoinHandle<()>
     {
         let benchmark_type = self.benchmark_type.clone();
 
@@ -149,7 +174,7 @@ impl Executor {
             let (mut client, connection) = match tokio_postgres::connect(&dsn, AsyncNoTls).await {
                 Ok((client, connection)) => (client, connection),
                 Err(error) => {
-                    eprintln!("ERROR: {}", error);
+                    terminal::err_msg(format!("{}", error).as_str());
                     std::process::exit(1);
                 }
             };
@@ -157,8 +182,8 @@ impl Executor {
             // The connection object performs the actual communication with the database,
             // so spawn it off to run on its own.
             tokio::spawn(async move {
-                if let Err(e) = connection.await {
-                    eprintln!("ERROR: {}", e);
+                if let Err(error) = connection.await {
+                    terminal::err_msg(format!("{}", error).as_str());
                     std::process::exit(1);
                 }
             });
@@ -168,8 +193,8 @@ impl Executor {
             // Create a new benchmark object by thread because we don't want to share a such
             // complex structure between all the client threads
             let benchmark_client = match benchmark_type.as_str() {
-                "tpcc" => tpcc::TPCC::new(scalefactor, start_id, end_id),
-                _ => tpcc::TPCC::new(scalefactor, start_id, end_id),
+                "tpcc" => tpcc::TPCC::new(0, min_id, max_id),
+                _ => tpcc::TPCC::new(0, min_id, max_id),
             };
 
             loop {
@@ -293,7 +318,7 @@ impl Executor {
     // Open a new connection to the database and returns a Client
     fn connect(dsn: String) -> Client {
         Client::connect(&dsn, NoTls).unwrap_or_else(|err| {
-            eprintln!("ERROR: {}", err);
+            terminal::err_msg(format!("{}", err).as_str());
             std::process::exit(1);
         })
     }
