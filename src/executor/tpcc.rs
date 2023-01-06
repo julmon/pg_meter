@@ -21,9 +21,6 @@ use rand::{distributions::Alphanumeric, Rng, seq::SliceRandom};
 use rust_decimal::prelude::*;
 
 use super::benchmark::{
-    AddIndexes,
-    AddPrimaryKeys,
-    AddForeignKeys,
     BenchmarkDDL,
     BenchmarkTransaction,
     Counter,
@@ -1642,48 +1639,6 @@ impl LoadData for TPCC {
             TPCC::populate_new_order(client, warehouse_id)?;
             TPCC::populate_order_line(client, warehouse_id, o_entry_d.clone())?;
         }
-        Ok(start.elapsed().as_micros())
-    }
-}
-
-impl AddPrimaryKeys for TPCC {
-    fn add_primary_keys(&self, client: &mut Client, ddls: Vec<String>) -> Result<u128, postgres::Error> {
-        let start = Instant::now();
-
-        for ddl in ddls.iter() {
-            let mut transaction = client.transaction()?;
-            transaction.batch_execute(ddl)?;
-            transaction.commit()?;
-        }
-
-        Ok(start.elapsed().as_micros())
-    }
-}
-
-impl AddForeignKeys for TPCC {
-    fn add_foreign_keys(&self, client: &mut Client, ddls: Vec<String>) -> Result<u128, postgres::Error> {
-        let start = Instant::now();
-
-        for ddl in ddls.iter() {
-            let mut transaction = client.transaction()?;
-            transaction.batch_execute(ddl)?;
-            transaction.commit()?;
-        }
-
-        Ok(start.elapsed().as_micros())
-    }
-}
-
-impl AddIndexes for TPCC {
-    fn add_indexes(&self, client: &mut Client, ddls: Vec<String>) -> Result<u128, postgres::Error> {
-        let start = Instant::now();
-
-        for ddl in ddls.iter() {
-            let mut transaction = client.transaction()?;
-            transaction.batch_execute(ddl)?;
-            transaction.commit()?;
-        }
-
         Ok(start.elapsed().as_micros())
     }
 }
