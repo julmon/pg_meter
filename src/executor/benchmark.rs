@@ -22,6 +22,7 @@ pub struct Counter {
     pub total_duration_ms: f64,
 }
 
+#[derive(Clone)]
 pub struct BenchmarkDDL {
     pub sql: String,
 }
@@ -45,18 +46,6 @@ pub trait PreLoadData {
 
 pub trait LoadData {
     fn load_data(&self, client: &mut Client, ids: Vec<u32>) -> Result<u128, String>;
-}
-
-pub trait AddPrimaryKeys {
-    fn add_primary_keys(&self, client: &mut Client, ddls: Vec<String>) -> Result<u128, postgres::Error>;
-}
-
-pub trait AddForeignKeys {
-    fn add_foreign_keys(&self, client: &mut Client, ddls: Vec<String>) -> Result<u128, postgres::Error>;
-}
-
-pub trait AddIndexes {
-    fn add_indexes(&self, client: &mut Client, ddls: Vec<String>) -> Result<u128, postgres::Error>;
 }
 
 pub trait PrintResultsSummary {

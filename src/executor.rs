@@ -19,8 +19,7 @@ mod tpcc;
 mod terminal;
 
 use benchmark::{
-    AddPrimaryKeys,
-    AddForeignKeys,
+    BenchmarkDDL,
     Counter,
     GetDefaultMaxId,
     InitializeSchema,
@@ -441,55 +440,53 @@ impl Executor {
         self
     }
 
-    pub fn add_primary_keys(&mut self, n_jobs: u32) -> &mut Self {
-        // Execute AddPrimaryKeys using multiple concurrent jobs
-        // Load the corresponding benchmark
-        let benchmark = match self.benchmark_type.as_str() {
-            "tpcc" => tpcc::TPCC::new(0, 0, 0),
-            _ => tpcc::TPCC::new(0, 0, 0),
-        };
-
-        let start = Instant::now();
-        let mut jobs = Vec::new();
-
-        let command = "INIT";
-        let message = format!("Primary keys creation using {} jobs", n_jobs);
-        terminal::start_msg(command, message.as_str());
-
-        // We want to get one line per jobs and the ids balanced across the lines.
-        let mut ddls = Vec::with_capacity(n_jobs as usize);
+    // Execute database multiple statements (DDLs, admin query, etc..) using n_jobs threads.
+    pub fn exec_stmts(&mut self, n_jobs: u32, stmts: Vec<BenchmarkDDL>) {
+        // We want to get one row per job and the ids balanced across the rowss.
+        let mut rows = Vec::with_capacity(n_jobs as usize);
         for _ in 0..n_jobs {
-            ddls.push(Vec::new());
+            rows.push(Vec::new());
         }
         let mut n = 1;
-        for ddl in benchmark.pkey_ddls.iter() {
-            ddls[(n % n_jobs) as usize].push(ddl.sql.clone());
+        for stmt in stmts.iter() {
+            rows[(n % n_jobs) as usize].push(stmt.sql.clone());
             n += 1;
         }
+        let mut jobs = Vec::new();
 
         for j in 1..=n_jobs {
             // Cloning values before passing them to the thread
-            let job_ddls = ddls[(j - 1) as usize].clone();
+            let job_stmts = rows[(j - 1) as usize].clone();
             let dsn = self.dsn.clone();
-
-            // Load the corresponding benchmark client
-            let job_benchmark_client = match self.benchmark_type.as_str() {
-                "tpcc" => tpcc::TPCC::new(0, 0, 0),
-                _ => tpcc::TPCC::new(0, 0, 0),
-            };
 
             // Starting a new job into its dedicated thread
             let job = thread::spawn(move || {
                 // New database connection
-                let mut job_client = Executor::connect(dsn);
+                let mut client = Executor::connect(dsn);
 
-                let _duration_us = match job_benchmark_client.add_primary_keys(&mut job_client, job_ddls) {
-                    Ok(duration) => duration,
-                    Err(error) => {
-                        terminal::err_msg(format!("{}", error).as_str());
-                        std::process::exit(1);
+                for stmt in job_stmts.iter() {
+                    let mut transaction = match client.transaction() {
+                        Ok(t) => t,
+                        Err(error) => {
+                            terminal::err_msg(format!("{}", error).as_str());
+                            std::process::exit(1);
+                        }
+                    };
+                    match transaction.batch_execute(stmt) {
+                        Ok(_) => (),
+                        Err(error) => {
+                            terminal::err_msg(format!("{}", error).as_str());
+                            std::process::exit(1);
+                        }
                     }
-                };
+                    match transaction.commit() {
+                        Ok(_) => (),
+                        Err(error) => {
+                            terminal::err_msg(format!("{}", error).as_str());
+                            std::process::exit(1);
+                        }
+                    }
+                }
             });
 
             jobs.push(job);
@@ -499,139 +496,55 @@ impl Executor {
         for job in jobs {
             job.join().expect("the client thread panicked");
         }
+    }
 
-        let duration_ms = start.elapsed().as_micros() as f64 / 1000 as f64;
-        terminal::done_msg(duration_ms);
+    pub fn add_primary_keys(&mut self, n_jobs: u32) -> &mut Self {
+        // Execute primary keys DDLs using multiple concurrent jobs
+        // Load the corresponding benchmark
+        let benchmark = match self.benchmark_type.as_str() {
+            "tpcc" => tpcc::TPCC::new(0, 0, 0),
+            _ => tpcc::TPCC::new(0, 0, 0),
+        };
+        let start = Instant::now();
+
+        terminal::start_msg("INIT", "Primary keys creation");
+
+        self.exec_stmts(n_jobs, benchmark.pkey_ddls.clone());
+        terminal::done_msg(start.elapsed().as_micros() as f64 / 1000 as f64);
 
         self
     }
 
     pub fn add_foreign_keys(&mut self, n_jobs: u32) -> &mut Self {
-        // Execute AddForeigneKeys using multiple concurrent jobs
+        // Execute foreign keys DDLs using multiple concurrent jobs
         // Load the corresponding benchmark
         let benchmark = match self.benchmark_type.as_str() {
             "tpcc" => tpcc::TPCC::new(0, 0, 0),
             _ => tpcc::TPCC::new(0, 0, 0),
         };
-
         let start = Instant::now();
-        let mut jobs = Vec::new();
 
-        let command = "INIT";
-        let message = format!("Foreign keys creation using {} jobs", n_jobs);
-        terminal::start_msg(command, message.as_str());
+        terminal::start_msg("INIT", "Foreign keys creation");
 
-        // We want to get one line per jobs and the ids balanced across the lines.
-        let mut ddls = Vec::with_capacity(n_jobs as usize);
-        for _ in 0..n_jobs {
-            ddls.push(Vec::new());
-        }
-        let mut n = 1;
-        for ddl in benchmark.fkey_ddls.iter() {
-            ddls[(n % n_jobs) as usize].push(ddl.sql.clone());
-            n += 1;
-        }
-
-        for j in 1..=n_jobs {
-            // Cloning values before passing them to the thread
-            let job_ddls = ddls[(j - 1) as usize].clone();
-            let dsn = self.dsn.clone();
-
-            // Load the corresponding benchmark client
-            let job_benchmark_client = match self.benchmark_type.as_str() {
-                "tpcc" => tpcc::TPCC::new(0, 0, 0),
-                _ => tpcc::TPCC::new(0, 0, 0),
-            };
-
-            // Starting a new job into its dedicated thread
-            let job = thread::spawn(move || {
-                // New database connection
-                let mut job_client = Executor::connect(dsn);
-
-                let _duration_us = match job_benchmark_client.add_foreign_keys(&mut job_client, job_ddls) {
-                    Ok(duration) => duration,
-                    Err(error) => {
-                        terminal::err_msg(format!("{}", error).as_str());
-                        std::process::exit(1);
-                    }
-                };
-            });
-
-            jobs.push(job);
-        }
-
-        // Wait for the end of all jobs
-        for job in jobs {
-            job.join().expect("the client thread panicked");
-        }
-
-        let duration_ms = start.elapsed().as_micros() as f64 / 1000 as f64;
-        terminal::done_msg(duration_ms);
+        self.exec_stmts(n_jobs, benchmark.fkey_ddls.clone());
+        terminal::done_msg(start.elapsed().as_micros() as f64 / 1000 as f64);
 
         self
     }
 
     pub fn add_indexes(&mut self, n_jobs: u32) -> &mut Self {
-        // Execute AddIndexes using multiple concurrent jobs
+        // Execute additional indexes DDLs using multiple concurrent jobs
         // Load the corresponding benchmark
         let benchmark = match self.benchmark_type.as_str() {
             "tpcc" => tpcc::TPCC::new(0, 0, 0),
             _ => tpcc::TPCC::new(0, 0, 0),
         };
-
         let start = Instant::now();
-        let mut jobs = Vec::new();
 
-        let command = "INIT";
-        let message = format!("Indexes creation using {} jobs", n_jobs);
-        terminal::start_msg(command, message.as_str());
+        terminal::start_msg("INIT", "Additional indexes creation");
 
-        // We want to get one line per jobs and the ids balanced across the lines.
-        let mut ddls = Vec::with_capacity(n_jobs as usize);
-        for _ in 0..n_jobs {
-            ddls.push(Vec::new());
-        }
-        let mut n = 1;
-        for ddl in benchmark.index_ddls.iter() {
-            ddls[(n % n_jobs) as usize].push(ddl.sql.clone());
-            n += 1;
-        }
-
-        for j in 1..=n_jobs {
-            // Cloning values before passing them to the thread
-            let job_ddls = ddls[(j - 1) as usize].clone();
-            let dsn = self.dsn.clone();
-
-            // Load the corresponding benchmark client
-            let job_benchmark_client = match self.benchmark_type.as_str() {
-                "tpcc" => tpcc::TPCC::new(0, 0, 0),
-                _ => tpcc::TPCC::new(0, 0, 0),
-            };
-
-            // Starting a new job into its dedicated thread
-            let job = thread::spawn(move || {
-                // New database connection
-                let mut job_client = Executor::connect(dsn);
-
-                let _duration_us = match job_benchmark_client.add_foreign_keys(&mut job_client, job_ddls) {
-                    Ok(duration) => duration,
-                    Err(error) => {
-                        terminal::err_msg(format!("{}", error).as_str());
-                        std::process::exit(1);
-                    }
-                };
-            });
-
-            jobs.push(job);
-        }
-
-        // Wait for the end of all jobs
-        for job in jobs {
-            job.join().expect("the client thread panicked");
-        }
-
-        let duration_ms = start.elapsed().as_micros() as f64 / 1000 as f64;
-        terminal::done_msg(duration_ms);
+        self.exec_stmts(n_jobs, benchmark.index_ddls.clone());
+        terminal::done_msg(start.elapsed().as_micros() as f64 / 1000 as f64);
 
         self
     }
