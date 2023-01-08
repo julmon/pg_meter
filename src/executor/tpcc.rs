@@ -21,14 +21,10 @@ use rand::{distributions::Alphanumeric, Rng, seq::SliceRandom};
 use rust_decimal::prelude::*;
 
 use super::benchmark::{
+    Benchmark,
     BenchmarkDDL,
     BenchmarkTransaction,
     Counter,
-    GetDefaultMaxId,
-    InitializeSchema,
-    LoadData,
-    PreLoadData,
-    PrintResultsSummary,
     ReadWrite,
 };
 
@@ -37,8 +33,8 @@ pub struct TPCC {
     pub name: String,
     pub description: String,
     pub scalefactor: u32,
-    pub start_id: u32,
-    pub end_id: u32,
+    pub min_id: u32,
+    pub max_id: u32,
     // Vector of the read and write transactions that will be executed for this benchmark
     pub transactions_rw: Vec<BenchmarkTransaction>,
     // Tables DDLs
@@ -87,13 +83,13 @@ impl Error for TPCCError {}
 
 // TPC-C-like implementation
 impl TPCC {
-    pub fn new(scalefactor: u32, start_id: u32, end_id: u32) -> TPCC {
+    pub fn new(scalefactor: u32, min_id: u32, max_id: u32) -> TPCC {
         TPCC {
             name: "TPC-C-like benchmark".to_string(),
             description: "TPC-C-like benchmark implementation.".to_string(),
             scalefactor: scalefactor,
-            start_id: start_id,
-            end_id: end_id,
+            min_id: min_id,
+            max_id: max_id,
             transactions_rw: Vec::from(
                 [
                     BenchmarkTransaction {
@@ -425,7 +421,7 @@ impl TPCC {
     }
 
     // The Delivery business transaction
-    pub async fn delivery(client: &mut AsyncClient, warehouse_id :i32, _start_id :u32, _end_id :u32) -> Result<u128, Box<dyn std::error::Error>> {
+    pub async fn delivery(client: &mut AsyncClient, warehouse_id :i32, _min_id :u32, _max_id :u32) -> Result<u128, Box<dyn std::error::Error>> {
         let start = Instant::now();
 
         let carrier_id :i32 = rand::thread_rng()
@@ -517,7 +513,7 @@ impl TPCC {
     }
 
     // The New-Order business transaction
-    pub async fn new_order(client: &mut AsyncClient, warehouse_id :i32, start_id :u32, end_id :u32) -> Result<u128, Box<dyn std::error::Error>> {
+    pub async fn new_order(client: &mut AsyncClient, warehouse_id :i32, min_id :u32, max_id :u32) -> Result<u128, Box<dyn std::error::Error>> {
         let district_id :i32 = rand::thread_rng()
             .gen_range(1..=10);
         let customer_id :i32 = rand::thread_rng()
@@ -559,7 +555,7 @@ impl TPCC {
 
             // If we have more than one warehouse, then ol_supply_w_id can be different from
             // warehouse_id
-            if (end_id - start_id) > 0 {
+            if (max_id - min_id) > 0 {
                 let x :u8 = rand::thread_rng()
                     .gen_range(1..=100);
                 if x == 1 {
@@ -567,7 +563,7 @@ impl TPCC {
                     // Pickup random warehouse id different from warehouse_id
                     while ol_supply_w_id == warehouse_id {
                         ol_supply_w_id = rand::thread_rng()
-                            .gen_range(start_id as i32..=end_id as i32);
+                            .gen_range(min_id as i32..=max_id as i32);
                     }
                 }
             }
@@ -681,7 +677,7 @@ impl TPCC {
     }
 
     // The Payment business transaction
-    pub async fn payment(client: &mut AsyncClient, warehouse_id :i32, start_id :u32, end_id :u32) -> Result<u128, Box<dyn std::error::Error>> {
+    pub async fn payment(client: &mut AsyncClient, warehouse_id :i32, min_id :u32, max_id :u32) -> Result<u128, Box<dyn std::error::Error>> {
         let x :u8 = rand::thread_rng()
             .gen_range(1..=100);
         let y :u8 = rand::thread_rng()
@@ -700,11 +696,11 @@ impl TPCC {
         else {
             c_d_id = rand::thread_rng()
                 .gen_range(1..=10);
-             if (end_id - start_id) > 0 {
+             if (max_id - min_id) > 0 {
                 // Pickup random warehouse id different from warehouse_id
                 loop {
                     c_w_id = rand::thread_rng()
-                        .gen_range(start_id as i32..=end_id as i32);
+                        .gen_range(min_id as i32..=max_id as i32);
                     if c_w_id != warehouse_id {
                         break;
                     }
@@ -831,7 +827,7 @@ impl TPCC {
     }
 
     // The Order-Status business transaction
-    pub async fn order_status(client: &mut AsyncClient, warehouse_id :i32, _start_id :u32, _end_id :u32) -> Result<u128, Box<dyn std::error::Error>> {
+    pub async fn order_status(client: &mut AsyncClient, warehouse_id :i32, _min_id :u32, _max_id :u32) -> Result<u128, Box<dyn std::error::Error>> {
         let y :u8 = rand::thread_rng()
             .gen_range(1..=100);
 
@@ -909,7 +905,7 @@ impl TPCC {
         Ok(start.elapsed().as_micros())
     }
 
-    pub async fn stock_level(client: &mut AsyncClient, warehouse_id :i32, _start_id :u32, _end_id :u32) -> Result<u128, Box<dyn std::error::Error>> {
+    pub async fn stock_level(client: &mut AsyncClient, warehouse_id :i32, _min_id :u32, _max_id :u32) -> Result<u128, Box<dyn std::error::Error>> {
         let district_id :i32 = rand::thread_rng()
             .gen_range(1..=10);
         let threshold :i32 = rand::thread_rng()
@@ -1557,35 +1553,35 @@ impl ReadWrite for TPCC {
         // Generate the warehouse id we are going to hit
         // The used type is i32 because it matches with Postgres' int4 type.
         let warehouse_id :i32 = rand::thread_rng()
-            .gen_range(self.start_id..=self.end_id) as i32;
+            .gen_range(self.min_id..=self.max_id) as i32;
 
         match transaction.id {
             1 => {
-                match TPCC::delivery(client, warehouse_id, self.start_id, self.end_id).await {
+                match TPCC::delivery(client, warehouse_id, self.min_id, self.max_id).await {
                     Ok(duration) => return Ok(duration),
                     Err(e) => return Err(Box::new(TPCCError(e.to_string()))),
                 }
             },
             2 => {
-                match TPCC::new_order(client, warehouse_id, self.start_id, self.end_id).await {
+                match TPCC::new_order(client, warehouse_id, self.min_id, self.max_id).await {
                     Ok(duration) => return Ok(duration),
                     Err(e) => return Err(Box::new(TPCCError(e.to_string()))),
                 }
             },
             3 => {
-                match TPCC::payment(client, warehouse_id, self.start_id, self.end_id).await {
+                match TPCC::payment(client, warehouse_id, self.min_id, self.max_id).await {
                     Ok(duration) => return Ok(duration),
                     Err(e) => return Err(Box::new(TPCCError(e.to_string()))),
                 }
             },
             4 => {
-                match TPCC::order_status(client, warehouse_id, self.start_id, self.end_id).await {
+                match TPCC::order_status(client, warehouse_id, self.min_id, self.max_id).await {
                     Ok(duration) => return Ok(duration),
                     Err(e) => return Err(Box::new(TPCCError(e.to_string()))),
                 }
             },
             5 => {
-                match TPCC::stock_level(client, warehouse_id, self.start_id, self.end_id).await {
+                match TPCC::stock_level(client, warehouse_id, self.min_id, self.max_id).await {
                     Ok(duration) => return Ok(duration),
                     Err(e) => return Err(Box::new(TPCCError(e.to_string()))),
                 }
@@ -1595,22 +1591,20 @@ impl ReadWrite for TPCC {
     }
 }
 
-impl InitializeSchema for TPCC {
+impl Benchmark for TPCC {
     fn initialize_schema(&self, client: &mut Client) -> Result<u128, postgres::Error> {
         let start = Instant::now();
 
         let mut transaction = client.transaction()?;
         // Sequentially create tables
-        for table_ddl in self.table_ddls.iter() {
+        for table_ddl in self.get_table_ddls().iter() {
             transaction.batch_execute(&table_ddl.sql)?;
         }
         transaction.commit()?;
 
         Ok(start.elapsed().as_micros())
     }
-}
 
-impl PreLoadData for TPCC {
     // On TPC-C-like benchmark, we need to:
     // - populate the item table with 100k randomly generated rows
     fn pre_load_data(&self, client: &mut Client) -> Result<u128, String> {
@@ -1621,9 +1615,7 @@ impl PreLoadData for TPCC {
 
         Ok(start.elapsed().as_micros())
     }
-}
 
-impl LoadData for TPCC {
     fn load_data(&self, client: &mut Client, warehouse_ids: Vec<u32>) -> Result<u128, String> {
         let start = Instant::now();
         for warehouse_id in warehouse_ids {
@@ -1641,9 +1633,7 @@ impl LoadData for TPCC {
         }
         Ok(start.elapsed().as_micros())
     }
-}
 
-impl PrintResultsSummary for TPCC {
     fn print_results_summary(&self, counters: HashMap<u16, Counter>, duration_ms: Duration) {
         println!("");
         println!("Benchmark results:");
@@ -1707,13 +1697,31 @@ impl PrintResultsSummary for TPCC {
 
         println!("{}", table);
     }
-}
 
-impl GetDefaultMaxId for TPCC {
     fn get_default_max_id(&self, client: &mut Client) -> Result<u32, postgres::Error> {
         let row_max_w_id = client.query(r"SELECT MAX(w_id) AS max_w_id FROM warehouse", &[])?;
         let max_w_id :i32 = row_max_w_id[0].get("max_w_id");
 
         Ok(max_w_id as u32)
+    }
+
+    fn get_transactions_rw(&self) -> Vec<BenchmarkTransaction> {
+        self.transactions_rw.clone()
+    }
+
+    fn get_table_ddls(&self) -> Vec<BenchmarkDDL> {
+        self.table_ddls.clone()
+    }
+
+    fn get_pkey_ddls(&self) -> Vec<BenchmarkDDL> {
+        self.pkey_ddls.clone()
+    }
+
+    fn get_fkey_ddls(&self) -> Vec<BenchmarkDDL> {
+        self.fkey_ddls.clone()
+    }
+
+    fn get_index_ddls(&self) -> Vec<BenchmarkDDL> {
+        self.index_ddls.clone()
     }
 }
