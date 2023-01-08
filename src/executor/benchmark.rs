@@ -6,6 +6,7 @@ use postgres::Client;
 use tokio_postgres::{Client as AsyncClient};
 
 // Transaction specifications
+#[derive(Clone)]
 pub struct BenchmarkTransaction {
     // Must be unique and greater than 0
     pub id: u16,
@@ -33,25 +34,15 @@ pub trait ReadWrite {
     async fn execute_rw_transaction(&self, client :&mut AsyncClient, transaction :&BenchmarkTransaction) -> Result<u128, Box<dyn std::error::Error>>;
 }
 
-// InitializeSchema trait: tables re-creation
-pub trait InitializeSchema {
+pub trait Benchmark:ReadWrite {
     fn initialize_schema(&self, client: &mut Client) -> Result<u128, postgres::Error>;
-}
-
-// PreLoadData trait: execute various operations after the DDL exec. operation and before
-// concurrently loading data into the database.
-pub trait PreLoadData {
     fn pre_load_data(&self, client: &mut Client) -> Result<u128, String>;
-}
-
-pub trait LoadData {
     fn load_data(&self, client: &mut Client, ids: Vec<u32>) -> Result<u128, String>;
-}
-
-pub trait PrintResultsSummary {
     fn print_results_summary(&self, counters: HashMap<u16, Counter>, duration_ms: Duration);
-}
-
-pub trait GetDefaultMaxId {
     fn get_default_max_id(&self, client: &mut Client) -> Result<u32, postgres::Error>;
+    fn get_transactions_rw(&self) -> Vec<BenchmarkTransaction>;
+    fn get_table_ddls(&self) -> Vec<BenchmarkDDL>;
+    fn get_pkey_ddls(&self) -> Vec<BenchmarkDDL>;
+    fn get_fkey_ddls(&self) -> Vec<BenchmarkDDL>;
+    fn get_index_ddls(&self) -> Vec<BenchmarkDDL>;
 }

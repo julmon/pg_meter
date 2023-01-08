@@ -19,13 +19,9 @@ mod tpcc;
 mod terminal;
 
 use benchmark::{
+    Benchmark,
     BenchmarkDDL,
     Counter,
-    GetDefaultMaxId,
-    InitializeSchema,
-    LoadData,
-    PreLoadData,
-    PrintResultsSummary,
     ReadWrite,
 };
 use txmessage::{TXMessage, TXMessageKind};
@@ -77,10 +73,7 @@ impl Executor {
                 terminal::start_msg(command, "Fetching maximum ID value");
                 // New database connection
                 let mut client = Executor::connect(self.dsn.clone());
-                let benchmark_client = match self.benchmark_type.as_str() {
-                    "tpcc" => tpcc::TPCC::new(0, 0, 0),
-                    _ => tpcc::TPCC::new(0, 0, 0),
-                };
+                let benchmark_client = self.get_benchmark(0, 0, 0);
 
                 let max_id = match benchmark_client.get_default_max_id(&mut client) {
                     Ok(max_id) => max_id,
@@ -153,10 +146,7 @@ impl Executor {
     pub fn print_results(&mut self) -> &mut Self {
         let duration_ms = Duration::from_millis((self.total_time_ms - self.rampup_time_ms) as u64);
         // Load the corresponding benchmark
-        let benchmark = match self.benchmark_type.as_str() {
-            "tpcc" => tpcc::TPCC::new(0, 0, 0),
-            _ => tpcc::TPCC::new(0, 0, 0),
-        };
+        let benchmark = self.get_benchmark(0, 0, 0);
 
         benchmark.print_results_summary(self.counters.clone(), duration_ms);
 
@@ -166,7 +156,9 @@ impl Executor {
     // Start a new read/write benchmark client in its own thread
     async fn start_rw_client(&mut self, duration_ms: u64, dsn: String, min_id: u32, max_id: u32, tx: Sender<TXMessage>) -> tokio::task::JoinHandle<()>
     {
-        let benchmark_type = self.benchmark_type.clone();
+        // Create a new benchmark object by thread because we don't want to share a such
+        // complex structure between all the client threads
+        let benchmark_client = self.get_benchmark(0, min_id, max_id);
 
         tokio::spawn(async move  {
             // New database connection
@@ -177,6 +169,7 @@ impl Executor {
                     std::process::exit(1);
                 }
             };
+            let transactions = benchmark_client.get_transactions_rw();
 
             // The connection object performs the actual communication with the database,
             // so spawn it off to run on its own.
@@ -189,20 +182,12 @@ impl Executor {
 
             // Used for tracking client execution time
             let start = Instant::now();
-            // Create a new benchmark object by thread because we don't want to share a such
-            // complex structure between all the client threads
-            let benchmark_client = match benchmark_type.as_str() {
-                "tpcc" => tpcc::TPCC::new(0, min_id, max_id),
-                _ => tpcc::TPCC::new(0, min_id, max_id),
-            };
-
             loop {
                 // Pickup a transaction, randomly and weight based.
                 let transaction = {
                     let mut rng = thread_rng();
-                    benchmark_client
-                        .transactions_rw
-                        .choose_weighted(&mut rng, |item| item.weight).unwrap()
+
+                    transactions.choose_weighted(&mut rng, |item| item.weight).unwrap()
                 };
                 // Execute the database transactions
                 match benchmark_client.execute_rw_transaction(&mut client, &transaction).await {
@@ -333,10 +318,7 @@ impl Executor {
         let mut client = Executor::connect(self.dsn.clone());
 
         // Load the corresponding benchmark client
-        let benchmark_client = match self.benchmark_type.as_str() {
-            "tpcc" => tpcc::TPCC::new(0, 0, 0),
-            _ => tpcc::TPCC::new(0, 0, 0),
-        };
+        let benchmark_client = self.get_benchmark(0, 0, 0);
 
         // Initialize the database model/schema
         let duration_us = match benchmark_client.initialize_schema(&mut client) {
@@ -359,10 +341,7 @@ impl Executor {
         let mut client = Executor::connect(self.dsn.clone());
 
         // Load the corresponding benchmark client
-        let benchmark_client = match self.benchmark_type.as_str() {
-            "tpcc" => tpcc::TPCC::new(scalefactor, 0, 0),
-            _ => tpcc::TPCC::new(scalefactor, 0, 0),
-        };
+        let benchmark_client = self.get_benchmark(scalefactor, 0, 0);
 
         let command = "INIT";
         let message = "Pre-loading operations";
@@ -408,10 +387,7 @@ impl Executor {
             let dsn = self.dsn.clone();
 
             // Load the corresponding benchmark client
-            let job_benchmark_client = match self.benchmark_type.as_str() {
-                "tpcc" => tpcc::TPCC::new(scalefactor, 0, 0),
-                _ => tpcc::TPCC::new(scalefactor, 0, 0),
-            };
+            let job_benchmark_client = self.get_benchmark(scalefactor, 0, 0);
 
             // Starting a new job into its dedicated thread
             let job = thread::spawn(move || {
@@ -498,18 +474,23 @@ impl Executor {
         }
     }
 
+    fn get_benchmark(&mut self, scalefactor: u32, min_id: u32, max_id: u32) -> impl Benchmark {
+        let benchmark = match self.benchmark_type.as_str() {
+            "tpcc" => tpcc::TPCC::new(scalefactor, min_id, max_id),
+            _ => tpcc::TPCC::new(scalefactor, min_id, max_id),
+        };
+
+        benchmark
+    }
+
     pub fn add_primary_keys(&mut self, n_jobs: u32) -> &mut Self {
         // Execute primary keys DDLs using multiple concurrent jobs
         // Load the corresponding benchmark
-        let benchmark = match self.benchmark_type.as_str() {
-            "tpcc" => tpcc::TPCC::new(0, 0, 0),
-            _ => tpcc::TPCC::new(0, 0, 0),
-        };
+        let benchmark = self.get_benchmark(0, 0, 0);
         let start = Instant::now();
 
         terminal::start_msg("INIT", "Primary keys creation");
-
-        self.exec_stmts(n_jobs, benchmark.pkey_ddls.clone());
+        self.exec_stmts(n_jobs, benchmark.get_pkey_ddls());
         terminal::done_msg(start.elapsed().as_micros() as f64 / 1000 as f64);
 
         self
@@ -518,15 +499,11 @@ impl Executor {
     pub fn add_foreign_keys(&mut self, n_jobs: u32) -> &mut Self {
         // Execute foreign keys DDLs using multiple concurrent jobs
         // Load the corresponding benchmark
-        let benchmark = match self.benchmark_type.as_str() {
-            "tpcc" => tpcc::TPCC::new(0, 0, 0),
-            _ => tpcc::TPCC::new(0, 0, 0),
-        };
+        let benchmark = self.get_benchmark(0, 0, 0);
         let start = Instant::now();
 
         terminal::start_msg("INIT", "Foreign keys creation");
-
-        self.exec_stmts(n_jobs, benchmark.fkey_ddls.clone());
+        self.exec_stmts(n_jobs, benchmark.get_fkey_ddls());
         terminal::done_msg(start.elapsed().as_micros() as f64 / 1000 as f64);
 
         self
@@ -535,15 +512,11 @@ impl Executor {
     pub fn add_indexes(&mut self, n_jobs: u32) -> &mut Self {
         // Execute additional indexes DDLs using multiple concurrent jobs
         // Load the corresponding benchmark
-        let benchmark = match self.benchmark_type.as_str() {
-            "tpcc" => tpcc::TPCC::new(0, 0, 0),
-            _ => tpcc::TPCC::new(0, 0, 0),
-        };
+        let benchmark = self.get_benchmark(0, 0, 0);
         let start = Instant::now();
 
         terminal::start_msg("INIT", "Additional indexes creation");
-
-        self.exec_stmts(n_jobs, benchmark.index_ddls.clone());
+        self.exec_stmts(n_jobs, benchmark.get_index_ddls());
         terminal::done_msg(start.elapsed().as_micros() as f64 / 1000 as f64);
 
         self
