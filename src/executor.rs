@@ -2,8 +2,7 @@ use std::time::{Duration, Instant};
 use std::thread::{JoinHandle, sleep};
 use std::thread;
 use std::fs::File;
-use std::io::prelude::*;
-use std::io::LineWriter;
+use std::io::{BufWriter, Write};
 use std::collections::HashMap;
 
 use chrono::Utc;
@@ -12,6 +11,8 @@ use postgres::{Client, NoTls};
 use rand::prelude::*;
 use tokio::runtime::Runtime;
 use tokio_postgres::{NoTls as AsyncNoTls};
+use itoa;
+use ryu;
 
 mod benchmark;
 mod txmessage;
@@ -21,6 +22,7 @@ mod terminal;
 use benchmark::{
     Benchmark,
     BenchmarkStmt,
+    BenchmarkTransaction,
     Counter,
     ReadWrite,
 };
@@ -160,7 +162,7 @@ impl Executor {
         // complex structure between all the client threads
         let benchmark_client = self.get_benchmark(0, min_id, max_id);
 
-        tokio::spawn(async move  {
+        tokio::spawn(async move {
             // New database connection
             let (mut client, connection) = match tokio_postgres::connect(&dsn, AsyncNoTls).await {
                 Ok((client, connection)) => (client, connection),
@@ -182,9 +184,10 @@ impl Executor {
 
             // Used for tracking client execution time
             let start = Instant::now();
+            let mut transaction: &BenchmarkTransaction;
             loop {
                 // Pickup a transaction, randomly and weight based.
-                let transaction = {
+                transaction = {
                     let mut rng = thread_rng();
 
                     transactions.choose_weighted(&mut rng, |item| item.weight).unwrap()
@@ -224,8 +227,7 @@ impl Executor {
                     std::process::exit(1);
                 },
             };
-            let mut log_file = LineWriter::new(log_file);
-
+            let mut log_file = BufWriter::new(log_file);
             // Create the error log file
             let error_file = match File::create(&error_file_path) {
                 Ok(f) => f,
@@ -234,17 +236,18 @@ impl Executor {
                     std::process::exit(1);
                 },
             };
-            let mut error_file = LineWriter::new(error_file);
+            let mut error_file = BufWriter::new(error_file);
 
             // Initialize the counters
             let mut counters: HashMap<u16, Counter> = HashMap::new();
 
             let mut ramping_up :bool = true;
+            let mut buffer_i = itoa::Buffer::new();
+            let mut buffer_f = ryu::Buffer::new();
 
             loop {
                 // Wait for a new message coming from the clients
                 let msg = rx.recv().unwrap();
-
                 // Exit thread
                 match msg.kind {
                     // Terminate data collector
@@ -268,8 +271,12 @@ impl Executor {
                         }
 
                         // Format and write the line to the log file
-                        let line = format!("{} {} {}\n", msg.tx_timestamp, msg.tx_id, duration_ms);
-                        log_file.write_all(line.as_bytes()).expect("Failed to write");
+                        log_file.write(&buffer_i.format(msg.tx_timestamp).as_bytes()).expect("Failed to write");
+                        log_file.write(b" ").expect("Failed to write");
+                        log_file.write(&buffer_i.format(msg.tx_id).as_bytes()).expect("Failed to write");
+                        log_file.write(b" ").expect("Failed to write");
+                        log_file.write(&buffer_f.format(duration_ms).as_bytes()).expect("Failed to write");
+                        log_file.write(b"\n").expect("Failed to write");
                     },
                     TXMessageKind::ERROR => {
                         // Counters calculation
@@ -283,8 +290,12 @@ impl Executor {
                         }
 
                         // Format and write the line to the log file
-                        let line = format!("{} {} {}\n", msg.tx_timestamp, msg.tx_id, msg.error);
-                        error_file.write_all(line.as_bytes()).expect("Failed to write");
+                        error_file.write(&buffer_i.format(msg.tx_timestamp).as_bytes()).expect("Failed to write");
+                        error_file.write(b" ").expect("Failed to write");
+                        error_file.write(&buffer_i.format(msg.tx_id).as_bytes()).expect("Failed to write");
+                        error_file.write(b" ").expect("Failed to write");
+                        error_file.write(msg.error.as_bytes()).expect("Failed to write");
+                        error_file.write(b"\n").expect("Failed to write");
                     },
                     TXMessageKind::ENDOFRAMPUP => {
                         ramping_up = false;
