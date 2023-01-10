@@ -22,7 +22,7 @@ use rust_decimal::prelude::*;
 
 use super::benchmark::{
     Benchmark,
-    BenchmarkDDL,
+    BenchmarkStmt,
     BenchmarkTransaction,
     Counter,
     ReadWrite,
@@ -38,13 +38,13 @@ pub struct TPCC {
     // Vector of the read and write transactions that will be executed for this benchmark
     pub transactions_rw: Vec<BenchmarkTransaction>,
     // Tables DDLs
-    pub table_ddls: Vec<BenchmarkDDL>,
+    pub table_ddls: Vec<BenchmarkStmt>,
     // Primary keys DDLs
-    pub pkey_ddls: Vec<BenchmarkDDL>,
+    pub pkey_ddls: Vec<BenchmarkStmt>,
     // Foreign keys DDLs
-    pub fkey_ddls: Vec<BenchmarkDDL>,
+    pub fkey_ddls: Vec<BenchmarkStmt>,
     // Additional index DDLs
-    pub index_ddls: Vec<BenchmarkDDL>,
+    pub index_ddls: Vec<BenchmarkStmt>,
 }
 
 #[derive(Tabled)]
@@ -121,10 +121,10 @@ impl TPCC {
             ),
             table_ddls: Vec::from(
                 [
-                    BenchmarkDDL {
+                    BenchmarkStmt {
                         sql: "DROP TABLE IF EXISTS warehouse CASCADE".to_string(),
                     },
-                    BenchmarkDDL {
+                    BenchmarkStmt {
                         sql: r"
                             CREATE TABLE warehouse (
                                 w_id INTEGER,
@@ -138,10 +138,10 @@ impl TPCC {
                                 w_ytd NUMERIC(24, 12)
                             );".to_string(),
                     },
-                    BenchmarkDDL {
+                    BenchmarkStmt {
                         sql: "DROP TABLE IF EXISTS district CASCADE".to_string(),
                     },
-                    BenchmarkDDL {
+                    BenchmarkStmt {
                         sql: r"
                             CREATE TABLE district (
                                 d_id INTEGER,
@@ -157,10 +157,10 @@ impl TPCC {
                                 d_next_o_id INTEGER
                             );".to_string(),
                     },
-                    BenchmarkDDL {
+                    BenchmarkStmt {
                         sql: "DROP TABLE IF EXISTS customer CASCADE".to_string(),
                     },
-                    BenchmarkDDL {
+                    BenchmarkStmt {
                         sql: r"
                             CREATE TABLE customer (
                                 c_id INTEGER,
@@ -186,10 +186,10 @@ impl TPCC {
                                 c_data VARCHAR(500)
                             );".to_string(),
                     },
-                    BenchmarkDDL {
+                    BenchmarkStmt {
                         sql: "DROP TABLE IF EXISTS history CASCADE".to_string(),
                     },
-                    BenchmarkDDL {
+                    BenchmarkStmt {
                         sql: r"
                             CREATE TABLE history (
                                 h_c_id INTEGER,
@@ -202,10 +202,10 @@ impl TPCC {
                                 h_data VARCHAR(24)
                             );".to_string(),
                     },
-                    BenchmarkDDL {
+                    BenchmarkStmt {
                         sql: "DROP TABLE IF EXISTS new_order CASCADE".to_string(),
                     },
-                    BenchmarkDDL {
+                    BenchmarkStmt {
                         sql: r"
                             CREATE TABLE new_order (
                                 no_o_id INTEGER,
@@ -213,10 +213,10 @@ impl TPCC {
                                 no_w_id INTEGER
                             );".to_string(),
                     },
-                    BenchmarkDDL {
+                    BenchmarkStmt {
                         sql: "DROP TABLE IF EXISTS orders CASCADE".to_string(),
                     },
-                    BenchmarkDDL {
+                    BenchmarkStmt {
                         sql: r"
                             CREATE TABLE orders (
                                 o_id INTEGER,
@@ -229,10 +229,10 @@ impl TPCC {
                                 o_all_local INTEGER
                             );".to_string(),
                     },
-                    BenchmarkDDL {
+                    BenchmarkStmt {
                         sql: "DROP TABLE IF EXISTS order_line CASCADE".to_string(),
                     },
-                    BenchmarkDDL {
+                    BenchmarkStmt {
                         sql: r"
                             CREATE TABLE order_line (
                                 ol_o_id INTEGER,
@@ -247,10 +247,10 @@ impl TPCC {
                                 ol_dist_info VARCHAR(24)
                             );".to_string(),
                     },
-                    BenchmarkDDL {
+                    BenchmarkStmt {
                         sql: "DROP TABLE IF EXISTS item CASCADE".to_string(),
                     },
-                    BenchmarkDDL {
+                    BenchmarkStmt {
                         sql: r"
                             CREATE TABLE item (
                                 i_id INTEGER,
@@ -260,10 +260,10 @@ impl TPCC {
                                 i_data VARCHAR(50)
                             );".to_string(),
                     },
-                    BenchmarkDDL {
+                    BenchmarkStmt {
                         sql: "DROP TABLE IF EXISTS stock CASCADE".to_string(),
                     },
-                    BenchmarkDDL {
+                    BenchmarkStmt {
                         sql: r"
                             CREATE TABLE stock (
                                 s_i_id INTEGER,
@@ -289,35 +289,35 @@ impl TPCC {
             ),
             pkey_ddls: Vec::from(
                 [
-                    BenchmarkDDL {
+                    BenchmarkStmt {
                         sql: "ALTER TABLE warehouse ADD PRIMARY KEY (w_id)".to_string(),
                     },
-                    BenchmarkDDL {
+                    BenchmarkStmt {
                         sql: "ALTER TABLE district ADD PRIMARY KEY (d_w_id, d_id)".to_string(),
                     },
-                    BenchmarkDDL {
+                    BenchmarkStmt {
                         sql: "ALTER TABLE customer ADD PRIMARY KEY (c_w_id, c_d_id, c_id)".to_string(),
                     },
-                    BenchmarkDDL {
+                    BenchmarkStmt {
                         sql: "ALTER TABLE new_order ADD PRIMARY KEY (no_w_id, no_d_id, no_o_id)".to_string(),
                     },
-                    BenchmarkDDL {
+                    BenchmarkStmt {
                         sql: "ALTER TABLE orders ADD PRIMARY KEY (o_w_id, o_d_id, o_id)".to_string(),
                     },
-                    BenchmarkDDL {
+                    BenchmarkStmt {
                         sql: "ALTER TABLE order_line ADD PRIMARY KEY (ol_w_id, ol_d_id, ol_o_id, ol_number)".to_string(),
                     },
-                    BenchmarkDDL {
+                    BenchmarkStmt {
                         sql: "ALTER TABLE stock ADD PRIMARY KEY (s_w_id, s_i_id)".to_string(),
                     },
-                    BenchmarkDDL {
+                    BenchmarkStmt {
                         sql: "ALTER TABLE item ADD PRIMARY KEY (i_id)".to_string(),
                     },
                 ]
             ),
             fkey_ddls: Vec::from(
                 [
-                    BenchmarkDDL {
+                    BenchmarkStmt {
                         sql: r"
                             ALTER TABLE district
                             ADD CONSTRAINT fk_district_warehouse
@@ -325,7 +325,7 @@ impl TPCC {
                             REFERENCES warehouse (w_id)
                             ".to_string(),
                     },
-                    BenchmarkDDL {
+                    BenchmarkStmt {
                         sql: r"
                             ALTER TABLE customer
                             ADD CONSTRAINT fk_customer_district
@@ -333,7 +333,7 @@ impl TPCC {
                             REFERENCES district (d_w_id, d_id)
                             ".to_string(),
                     },
-                    BenchmarkDDL {
+                    BenchmarkStmt {
                         sql: r"
                             ALTER TABLE history
                             ADD CONSTRAINT fk_history_customer
@@ -341,7 +341,7 @@ impl TPCC {
                             REFERENCES customer (c_w_id, c_d_id, c_id)
                             ".to_string(),
                     },
-                    BenchmarkDDL {
+                    BenchmarkStmt {
                         sql: r"
                             ALTER TABLE history
                             ADD CONSTRAINT fk_history_district
@@ -349,7 +349,7 @@ impl TPCC {
                             REFERENCES district (d_w_id, d_id)
                             ".to_string(),
                     },
-                    BenchmarkDDL {
+                    BenchmarkStmt {
                         sql: r"
                             ALTER TABLE new_order
                             ADD CONSTRAINT fk_new_order_orders
@@ -357,7 +357,7 @@ impl TPCC {
                             REFERENCES orders (o_w_id, o_d_id, o_id)
                             ".to_string(),
                     },
-                    BenchmarkDDL {
+                    BenchmarkStmt {
                         sql: r"
                             ALTER TABLE orders
                             ADD CONSTRAINT fk_orders_customer
@@ -365,7 +365,7 @@ impl TPCC {
                             REFERENCES customer (c_w_id, c_d_id, c_id)
                             ".to_string(),
                     },
-                    BenchmarkDDL {
+                    BenchmarkStmt {
                         sql: r"
                             ALTER TABLE order_line
                             ADD CONSTRAINT fk_order_line_orders
@@ -373,7 +373,7 @@ impl TPCC {
                             REFERENCES orders (o_w_id, o_d_id, o_id)
                             ".to_string(),
                     },
-                    BenchmarkDDL {
+                    BenchmarkStmt {
                         sql: r"
                             ALTER TABLE order_line
                             ADD CONSTRAINT fk_order_line_stock
@@ -381,7 +381,7 @@ impl TPCC {
                             REFERENCES stock (s_w_id, s_i_id)
                             ".to_string(),
                     },
-                    BenchmarkDDL {
+                    BenchmarkStmt {
                         sql: r"
                             ALTER TABLE stock
                             ADD CONSTRAINT fk_stock_warehouse
@@ -389,7 +389,7 @@ impl TPCC {
                             REFERENCES warehouse (w_id)
                             ".to_string(),
                     },
-                    BenchmarkDDL {
+                    BenchmarkStmt {
                         sql: r"
                             ALTER TABLE stock
                             ADD CONSTRAINT fk_stock_item
@@ -401,7 +401,7 @@ impl TPCC {
             ),
             index_ddls: Vec::from(
                 [
-                     BenchmarkDDL {
+                     BenchmarkStmt {
                         sql: "CREATE INDEX i_customer_c_last ON customer (c_last)".to_string(),
                     },
                 ]
@@ -1709,19 +1709,19 @@ impl Benchmark for TPCC {
         self.transactions_rw.clone()
     }
 
-    fn get_table_ddls(&self) -> Vec<BenchmarkDDL> {
+    fn get_table_ddls(&self) -> Vec<BenchmarkStmt> {
         self.table_ddls.clone()
     }
 
-    fn get_pkey_ddls(&self) -> Vec<BenchmarkDDL> {
+    fn get_pkey_ddls(&self) -> Vec<BenchmarkStmt> {
         self.pkey_ddls.clone()
     }
 
-    fn get_fkey_ddls(&self) -> Vec<BenchmarkDDL> {
+    fn get_fkey_ddls(&self) -> Vec<BenchmarkStmt> {
         self.fkey_ddls.clone()
     }
 
-    fn get_index_ddls(&self) -> Vec<BenchmarkDDL> {
+    fn get_index_ddls(&self) -> Vec<BenchmarkStmt> {
         self.index_ddls.clone()
     }
 }
