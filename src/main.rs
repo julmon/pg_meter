@@ -18,7 +18,8 @@ fn main() {
                 .load_data(env.init_args.scalefactor, env.init_args.jobs)
                 .add_primary_keys(env.init_args.jobs)
                 .add_foreign_keys(env.init_args.jobs)
-                .add_indexes(env.init_args.jobs);
+                .add_indexes(env.init_args.jobs)
+                .vacuum(env.init_args.jobs);
         },
         _ => todo!(),
     }

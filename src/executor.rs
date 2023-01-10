@@ -417,7 +417,7 @@ impl Executor {
     }
 
     // Execute database multiple statements (DDLs, admin query, etc..) using n_jobs threads.
-    pub fn exec_stmts(&mut self, n_jobs: u32, stmts: Vec<BenchmarkStmt>) {
+    pub fn exec_stmts(&mut self, n_jobs: u32, stmts: Vec<BenchmarkStmt>, use_transaction: bool) {
         // We want to get one row per job and the ids balanced across the rowss.
         let mut rows = Vec::with_capacity(n_jobs as usize);
         for _ in 0..n_jobs {
@@ -441,25 +441,37 @@ impl Executor {
                 let mut client = Executor::connect(dsn);
 
                 for stmt in job_stmts.iter() {
-                    let mut transaction = match client.transaction() {
-                        Ok(t) => t,
-                        Err(error) => {
-                            terminal::err_msg(format!("{}", error).as_str());
-                            std::process::exit(1);
+                    if use_transaction {
+                        let mut transaction = match client.transaction() {
+                            Ok(t) => t,
+                            Err(error) => {
+                                terminal::err_msg(format!("{}", error).as_str());
+                                std::process::exit(1);
+                            }
+                        };
+                        match transaction.batch_execute(stmt) {
+                            Ok(_) => (),
+                            Err(error) => {
+                                terminal::err_msg(format!("{}", error).as_str());
+                                std::process::exit(1);
+                            }
                         }
-                    };
-                    match transaction.batch_execute(stmt) {
-                        Ok(_) => (),
-                        Err(error) => {
-                            terminal::err_msg(format!("{}", error).as_str());
-                            std::process::exit(1);
+                        match transaction.commit() {
+                            Ok(_) => (),
+                            Err(error) => {
+                                terminal::err_msg(format!("{}", error).as_str());
+                                std::process::exit(1);
+                            }
                         }
                     }
-                    match transaction.commit() {
-                        Ok(_) => (),
-                        Err(error) => {
-                            terminal::err_msg(format!("{}", error).as_str());
-                            std::process::exit(1);
+                    // No transaction
+                    else {
+                        match client.batch_execute(stmt) {
+                            Ok(_) => (),
+                            Err(error) => {
+                                terminal::err_msg(format!("{}", error).as_str());
+                                std::process::exit(1);
+                            }
                         }
                     }
                 }
@@ -490,7 +502,7 @@ impl Executor {
         let start = Instant::now();
 
         terminal::start_msg("INIT", "Primary keys creation");
-        self.exec_stmts(n_jobs, benchmark.get_pkey_ddls());
+        self.exec_stmts(n_jobs, benchmark.get_pkey_ddls(), true);
         terminal::done_msg(start.elapsed().as_micros() as f64 / 1000 as f64);
 
         self
@@ -503,7 +515,7 @@ impl Executor {
         let start = Instant::now();
 
         terminal::start_msg("INIT", "Foreign keys creation");
-        self.exec_stmts(n_jobs, benchmark.get_fkey_ddls());
+        self.exec_stmts(n_jobs, benchmark.get_fkey_ddls(), true);
         terminal::done_msg(start.elapsed().as_micros() as f64 / 1000 as f64);
 
         self
@@ -516,7 +528,20 @@ impl Executor {
         let start = Instant::now();
 
         terminal::start_msg("INIT", "Additional indexes creation");
-        self.exec_stmts(n_jobs, benchmark.get_index_ddls());
+        self.exec_stmts(n_jobs, benchmark.get_index_ddls(), true);
+        terminal::done_msg(start.elapsed().as_micros() as f64 / 1000 as f64);
+
+        self
+    }
+
+    pub fn vacuum(&mut self, n_jobs: u32) -> &mut Self {
+        // Execute VACUUM statementsusing multiple concurrent jobs
+        // Load the corresponding benchmark
+        let benchmark = self.get_benchmark(0, 0, 0);
+        let start = Instant::now();
+
+        terminal::start_msg("INIT", "Vacuuming tables");
+        self.exec_stmts(n_jobs, benchmark.get_vacuum_stmts(), false);
         terminal::done_msg(start.elapsed().as_micros() as f64 / 1000 as f64);
 
         self

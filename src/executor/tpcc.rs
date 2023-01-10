@@ -45,6 +45,8 @@ pub struct TPCC {
     pub fkey_ddls: Vec<BenchmarkStmt>,
     // Additional index DDLs
     pub index_ddls: Vec<BenchmarkStmt>,
+    // Vacuum table statememts
+    pub vacuum_stmts: Vec<BenchmarkStmt>,
 }
 
 #[derive(Tabled)]
@@ -405,7 +407,20 @@ impl TPCC {
                         sql: "CREATE INDEX i_customer_c_last ON customer (c_last)".to_string(),
                     },
                 ]
-            )
+            ),
+            vacuum_stmts: Vec::from(
+                [
+                    BenchmarkStmt { sql: "VACUUM FREEZE warehouse".to_string() },
+                    BenchmarkStmt { sql: "VACUUM FREEZE district".to_string() },
+                    BenchmarkStmt { sql: "VACUUM FREEZE customer".to_string() },
+                    BenchmarkStmt { sql: "VACUUM FREEZE history".to_string() },
+                    BenchmarkStmt { sql: "VACUUM FREEZE new_order".to_string() },
+                    BenchmarkStmt { sql: "VACUUM FREEZE orders".to_string() },
+                    BenchmarkStmt { sql: "VACUUM FREEZE order_line".to_string() },
+                    BenchmarkStmt { sql: "VACUUM FREEZE item".to_string() },
+                    BenchmarkStmt { sql: "VACUUM FREEZE stock".to_string() },
+                ]
+            ),
         }
     }
 
@@ -1723,5 +1738,9 @@ impl Benchmark for TPCC {
 
     fn get_index_ddls(&self) -> Vec<BenchmarkStmt> {
         self.index_ddls.clone()
+    }
+
+    fn get_vacuum_stmts(&self) -> Vec<BenchmarkStmt> {
+        self.vacuum_stmts.clone()
     }
 }

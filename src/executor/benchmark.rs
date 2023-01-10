@@ -45,4 +45,5 @@ pub trait Benchmark:ReadWrite {
     fn get_pkey_ddls(&self) -> Vec<BenchmarkStmt>;
     fn get_fkey_ddls(&self) -> Vec<BenchmarkStmt>;
     fn get_index_ddls(&self) -> Vec<BenchmarkStmt>;
+    fn get_vacuum_stmts(&self) -> Vec<BenchmarkStmt>;
 }
