@@ -20,7 +20,7 @@ mod terminal;
 
 use benchmark::{
     Benchmark,
-    BenchmarkDDL,
+    BenchmarkStmt,
     Counter,
     ReadWrite,
 };
@@ -417,7 +417,7 @@ impl Executor {
     }
 
     // Execute database multiple statements (DDLs, admin query, etc..) using n_jobs threads.
-    pub fn exec_stmts(&mut self, n_jobs: u32, stmts: Vec<BenchmarkDDL>) {
+    pub fn exec_stmts(&mut self, n_jobs: u32, stmts: Vec<BenchmarkStmt>) {
         // We want to get one row per job and the ids balanced across the rowss.
         let mut rows = Vec::with_capacity(n_jobs as usize);
         for _ in 0..n_jobs {

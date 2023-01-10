@@ -24,7 +24,7 @@ pub struct Counter {
 }
 
 #[derive(Clone)]
-pub struct BenchmarkDDL {
+pub struct BenchmarkStmt {
     pub sql: String,
 }
 
@@ -41,8 +41,8 @@ pub trait Benchmark:ReadWrite {
     fn print_results_summary(&self, counters: HashMap<u16, Counter>, duration_ms: Duration);
     fn get_default_max_id(&self, client: &mut Client) -> Result<u32, postgres::Error>;
     fn get_transactions_rw(&self) -> Vec<BenchmarkTransaction>;
-    fn get_table_ddls(&self) -> Vec<BenchmarkDDL>;
-    fn get_pkey_ddls(&self) -> Vec<BenchmarkDDL>;
-    fn get_fkey_ddls(&self) -> Vec<BenchmarkDDL>;
-    fn get_index_ddls(&self) -> Vec<BenchmarkDDL>;
+    fn get_table_ddls(&self) -> Vec<BenchmarkStmt>;
+    fn get_pkey_ddls(&self) -> Vec<BenchmarkStmt>;
+    fn get_fkey_ddls(&self) -> Vec<BenchmarkStmt>;
+    fn get_index_ddls(&self) -> Vec<BenchmarkStmt>;
 }
