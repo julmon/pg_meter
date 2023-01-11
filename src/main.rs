@@ -19,7 +19,8 @@ fn main() {
                 .add_primary_keys(env.init_args.jobs)
                 .add_foreign_keys(env.init_args.jobs)
                 .add_indexes(env.init_args.jobs)
-                .vacuum(env.init_args.jobs);
+                .vacuum(env.init_args.jobs)
+                .checkpoint();
         },
         _ => todo!(),
     }
