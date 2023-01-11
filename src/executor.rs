@@ -506,8 +506,8 @@ impl Executor {
         benchmark
     }
 
+    // Execute primary keys DDLs using multiple concurrent jobs
     pub fn add_primary_keys(&mut self, n_jobs: u32) -> &mut Self {
-        // Execute primary keys DDLs using multiple concurrent jobs
         // Load the corresponding benchmark
         let benchmark = self.get_benchmark(0, 0, 0);
         let start = Instant::now();
@@ -519,8 +519,8 @@ impl Executor {
         self
     }
 
+    // Execute foreign keys DDLs using multiple concurrent jobs
     pub fn add_foreign_keys(&mut self, n_jobs: u32) -> &mut Self {
-        // Execute foreign keys DDLs using multiple concurrent jobs
         // Load the corresponding benchmark
         let benchmark = self.get_benchmark(0, 0, 0);
         let start = Instant::now();
@@ -532,8 +532,8 @@ impl Executor {
         self
     }
 
+    // Execute additional indexes DDLs using multiple concurrent jobs
     pub fn add_indexes(&mut self, n_jobs: u32) -> &mut Self {
-        // Execute additional indexes DDLs using multiple concurrent jobs
         // Load the corresponding benchmark
         let benchmark = self.get_benchmark(0, 0, 0);
         let start = Instant::now();
@@ -545,14 +545,34 @@ impl Executor {
         self
     }
 
+    // Execute VACUUM statementsusing multiple concurrent jobs
     pub fn vacuum(&mut self, n_jobs: u32) -> &mut Self {
-        // Execute VACUUM statementsusing multiple concurrent jobs
         // Load the corresponding benchmark
         let benchmark = self.get_benchmark(0, 0, 0);
         let start = Instant::now();
 
         terminal::start_msg("INIT", "Vacuuming tables");
         self.exec_stmts(n_jobs, benchmark.get_vacuum_stmts(), false);
+        terminal::done_msg(start.elapsed().as_micros() as f64 / 1000 as f64);
+
+        self
+    }
+
+    // Force a checkpoint
+    pub fn checkpoint(&mut self) -> &mut Self {
+        let start = Instant::now();
+
+        terminal::start_msg("INIT", "Forcing checkpoint");
+        let mut client = Executor::connect(self.dsn.clone());
+
+        match client.batch_execute("CHECKPOINT") {
+            Ok(_) => (),
+            Err(error) => {
+                terminal::err_msg(format!("{}", error).as_str());
+                std::process::exit(1);
+            }
+        }
+
         terminal::done_msg(start.elapsed().as_micros() as f64 / 1000 as f64);
 
         self
