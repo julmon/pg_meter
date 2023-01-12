@@ -3,7 +3,7 @@ use std::thread::{JoinHandle, sleep};
 use std::thread;
 use std::fs::File;
 use std::io::{BufWriter, Write};
-use std::collections::HashMap;
+use std::collections::{HashMap, BTreeMap};
 
 use chrono::Utc;
 use crossbeam_channel::{Sender, Receiver, unbounded};
@@ -99,16 +99,16 @@ impl Executor {
 
         rt.block_on(async {
             // Start the clients
-            for n in 1..=args.client {
+            for client_id in 1..=args.client {
                 // Test duration calculated by taking in consideration the rampup time and the
                 // remaining duration before the end of rampup stage.
-                let duration_ms = time_ms + rampup_ms - n as u64 * sleep_ms;
+                let duration_ms = time_ms + rampup_ms - client_id as u64 * sleep_ms;
 
                 // Sleep accordingly to the rampup time and the number of clients
                 sleep(Duration::from_millis(sleep_ms));
 
                 // Start one new client
-                let benchmark_client = self.start_rw_client(duration_ms, self.dsn.clone(), args.min_id.clone(), max_id.clone(), tx.clone()).await;
+                let benchmark_client = self.start_rw_client(duration_ms, self.dsn.clone(), args.min_id.clone(), max_id.clone(), tx.clone(), client_id as u32).await;
 
                 benchmark_clients.push(benchmark_client);
             }
@@ -156,7 +156,7 @@ impl Executor {
     }
 
     // Start a new read/write benchmark client in its own thread
-    async fn start_rw_client(&mut self, duration_ms: u64, dsn: String, min_id: u32, max_id: u32, tx: Sender<TXMessage>) -> tokio::task::JoinHandle<()>
+    async fn start_rw_client(&mut self, duration_ms: u64, dsn: String, min_id: u32, max_id: u32, tx: Sender<TXMessage>, client_id: u32) -> tokio::task::JoinHandle<()>
     {
         // Create a new benchmark object by thread because we don't want to share a such
         // complex structure between all the client threads
@@ -196,12 +196,12 @@ impl Executor {
                 match benchmark_client.execute_rw_transaction(&mut client, &transaction).await {
                     Ok(duration) => {
                         // Send committed message
-                        let m = TXMessage::committed(transaction.id, Utc::now().timestamp(), duration);
+                        let m = TXMessage::committed(transaction.id, client_id, Utc::now().timestamp(), duration);
                         tx.send(m).unwrap();
                     },
                     Err(error) => {
                         // Send error message
-                        let m = TXMessage::error(transaction.id, Utc::now().timestamp(), format!("{}", error));
+                        let m = TXMessage::error(transaction.id, client_id, Utc::now().timestamp(), format!("{}", error));
                         tx.send(m).unwrap();
                     },
                 }
@@ -240,11 +240,13 @@ impl Executor {
 
             // Initialize the counters
             let mut counters: HashMap<u16, Counter> = HashMap::new();
+            let mut client_ids = BTreeMap::new();
 
             let mut ramping_up :bool = true;
             let mut buffer_i = itoa::Buffer::new();
             let mut buffer_f = ryu::Buffer::new();
 
+            let mut n_client: u32 = 0;
             loop {
                 // Wait for a new message coming from the clients
                 let msg = rx.recv().unwrap();
@@ -256,6 +258,15 @@ impl Executor {
                     },
                     // Committed transaction
                     TXMessageKind::COMMITTED => {
+                        // Keep a track of the client_ids and increment n_client if this is a new client_id
+                        n_client = match client_ids.get(&msg.client_id) {
+                            None => {
+                                client_ids.insert(msg.client_id, true);
+                                n_client += 1;
+                                n_client
+                            },
+                            Some(_) => n_client,
+                        };
                         let duration_ms = msg.tx_duration_us as f64 / 1000 as f64;
                         // Counters calculation
                         // Update counters only if the rampup stage is over
@@ -273,12 +284,23 @@ impl Executor {
                         // Format and write the line to the log file
                         log_file.write(&buffer_i.format(msg.tx_timestamp).as_bytes()).expect("Failed to write");
                         log_file.write(b" ").expect("Failed to write");
+                        log_file.write(&buffer_i.format(n_client).as_bytes()).expect("Failed to write");
+                        log_file.write(b" ").expect("Failed to write");
                         log_file.write(&buffer_i.format(msg.tx_id).as_bytes()).expect("Failed to write");
                         log_file.write(b" ").expect("Failed to write");
                         log_file.write(&buffer_f.format(duration_ms).as_bytes()).expect("Failed to write");
                         log_file.write(b"\n").expect("Failed to write");
                     },
                     TXMessageKind::ERROR => {
+                        // Keep a track of the client_ids and increment n_client if this is a new client_id
+                        n_client = match client_ids.get(&msg.client_id) {
+                            None => {
+                                client_ids.insert(msg.client_id, true);
+                                n_client += 1;
+                                n_client
+                            },
+                            Some(_) => n_client,
+                        };
                         // Counters calculation
                         if !ramping_up {
                             if let Some(c) = counters.get_mut(&msg.tx_id) {
@@ -291,6 +313,8 @@ impl Executor {
 
                         // Format and write the line to the log file
                         error_file.write(&buffer_i.format(msg.tx_timestamp).as_bytes()).expect("Failed to write");
+                        error_file.write(b" ").expect("Failed to write");
+                        error_file.write(&buffer_i.format(n_client).as_bytes()).expect("Failed to write");
                         error_file.write(b" ").expect("Failed to write");
                         error_file.write(&buffer_i.format(msg.tx_id).as_bytes()).expect("Failed to write");
                         error_file.write(b" ").expect("Failed to write");
