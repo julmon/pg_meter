@@ -544,7 +544,12 @@ impl Executor {
     }
 
     // Execute foreign keys DDLs using multiple concurrent jobs
-    pub fn add_foreign_keys(&mut self, n_jobs: u32) -> &mut Self {
+    pub fn add_foreign_keys(&mut self, n_jobs: u32, no_fkey: bool) -> &mut Self {
+        // Don't do anything if no_fkey is true
+        if no_fkey {
+            return self;
+        }
+
         // Load the corresponding benchmark
         let benchmark = self.get_benchmark(0, 0, 0);
         let start = Instant::now();
