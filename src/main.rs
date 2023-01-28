@@ -17,7 +17,7 @@ fn main() {
                 .init_db_schema()
                 .load_data(env.init_args.scalefactor, env.init_args.jobs)
                 .add_primary_keys(env.init_args.jobs)
-                .add_foreign_keys(env.init_args.jobs)
+                .add_foreign_keys(env.init_args.jobs, env.init_args.no_fkey)
                 .add_indexes(env.init_args.jobs)
                 .vacuum(env.init_args.jobs)
                 .checkpoint();

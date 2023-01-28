@@ -29,6 +29,8 @@ pub struct InitArgs {
     pub scalefactor: u32,
     // Number of concurrent jobs used to populate the database
     pub jobs: u32,
+    // Do not create foreign keys
+    pub no_fkey: bool,
 }
 
 // CLI arguments
@@ -63,7 +65,7 @@ impl RunArgs {
 // Implementation of InitArgs::empty()
 impl InitArgs {
     fn empty() -> Self {
-        InitArgs {scalefactor: 0, jobs: 0}
+        InitArgs {scalefactor: 0, jobs: 0, no_fkey: false}
     }
 }
 
@@ -226,6 +228,12 @@ impl PgMtrArgs {
             .value_name("NUM")
             .default_value("1");
 
+        // init: Define the --no-fkey command line option
+        let no_fkey_option = Arg::new("no_fkey")
+            .long("no-fkey") // allow --no-fkey
+            .action(ArgAction::SetTrue)
+            .help("Do not create foreign keys");
+
         // Sub-commands
         // run tpcc <OPTIONS>
         let run_tpcc = Command::new("tpcc")
@@ -240,7 +248,8 @@ impl PgMtrArgs {
         let init_tpcc = Command::new("tpcc")
             .about("Initialize TPC-C-like benchmark data")
             .arg(scalefactor_option)
-            .arg(jobs_option);
+            .arg(jobs_option)
+            .arg(no_fkey_option);
 
         // init <SUBCOMMAND> <OPTIONS>
         let init = Command::new("init")
@@ -299,7 +308,7 @@ impl PgMtrArgs {
                 let init_m = matches.subcommand_matches("init").unwrap();
                 let (run_args, init_args, benchmark_type) = match init_m.subcommand_name() {
                     Some("tpcc") => {
-                        let (scalefactor, jobs) = match init_m.subcommand_matches("tpcc") {
+                        let (scalefactor, jobs, no_fkey) = match init_m.subcommand_matches("tpcc") {
                             Some(tpcc_m) => {
                                 let scalefactor_str = tpcc_m
                                     .get_one::<String>("scalefactor")
@@ -307,17 +316,19 @@ impl PgMtrArgs {
                                 let jobs_str = tpcc_m
                                     .get_one::<String>("jobs")
                                     .unwrap();
+                                let no_fkey = tpcc_m.get_flag("no_fkey");
+
                                 // Convert scalefactor to u32
                                 let scalefactor = parse_string_arg_to_u32(scalefactor_str, "invalid scale factor number".to_string())?;
                                 // Convert jobs to u32
                                 let jobs = parse_string_arg_to_u32(jobs_str, "invalid jobs number".to_string())?;
 
-                                (scalefactor, jobs)
+                                (scalefactor, jobs, no_fkey)
                             },
-                            _ => (0, 0)
+                            _ => (0, 0, false)
                         };
 
-                        (RunArgs::empty(), InitArgs {scalefactor: scalefactor, jobs: jobs}, "tpcc".to_string())
+                        (RunArgs::empty(), InitArgs {scalefactor: scalefactor, jobs: jobs, no_fkey: no_fkey}, "tpcc".to_string())
                     },
                     _ => (RunArgs::empty(), InitArgs::empty(), "undefined".to_string()),
                 };
