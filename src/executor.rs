@@ -10,7 +10,8 @@ use crossbeam_channel::{Sender, Receiver, unbounded};
 use postgres::{Client, NoTls};
 use rand::prelude::*;
 use tokio::runtime::Runtime;
-use tokio_postgres::{NoTls as AsyncNoTls};
+use sqlx::PgConnection;
+use sqlx::Connection;
 use itoa;
 use ryu;
 
@@ -164,8 +165,8 @@ impl Executor {
 
         tokio::spawn(async move {
             // New database connection
-            let (mut client, connection) = match tokio_postgres::connect(&dsn, AsyncNoTls).await {
-                Ok((client, connection)) => (client, connection),
+            let mut connection = match PgConnection::connect(&dsn).await {
+                Ok(connection) => connection,
                 Err(error) => {
                     terminal::err_msg(format!("{}", error).as_str());
                     std::process::exit(1);
@@ -173,6 +174,7 @@ impl Executor {
             };
             let transactions = benchmark_client.get_transactions_rw();
 
+            /*
             // The connection object performs the actual communication with the database,
             // so spawn it off to run on its own.
             tokio::spawn(async move {
@@ -181,6 +183,7 @@ impl Executor {
                     std::process::exit(1);
                 }
             });
+            */
 
             // Used for tracking client execution time
             let start = Instant::now();
@@ -193,7 +196,7 @@ impl Executor {
                     transactions.choose_weighted(&mut rng, |item| item.weight).unwrap()
                 };
                 // Execute the database transactions
-                match benchmark_client.execute_rw_transaction(&mut client, &transaction).await {
+                match benchmark_client.execute_rw_transaction(&mut connection, &transaction).await {
                     Ok(duration) => {
                         // Send committed message
                         let m = TXMessage::committed(transaction.id, client_id, Utc::now().timestamp(), duration);

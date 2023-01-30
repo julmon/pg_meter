@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use postgres::Client;
-use tokio_postgres::{Client as AsyncClient};
+use sqlx::PgConnection;
 
 // Transaction specifications
 #[derive(Clone)]
@@ -31,7 +31,7 @@ pub struct BenchmarkStmt {
 // ReadWrite trait for all benchmarks implementing read/write workload
 #[async_trait]
 pub trait ReadWrite {
-    async fn execute_rw_transaction(&self, client :&mut AsyncClient, transaction :&BenchmarkTransaction) -> Result<u128, Box<dyn std::error::Error>>;
+    async fn execute_rw_transaction(&self, conn: &mut PgConnection, transaction :&BenchmarkTransaction) -> Result<u128, Box<dyn std::error::Error>>;
 }
 
 pub trait Benchmark:ReadWrite {

@@ -16,9 +16,9 @@ use tabled::{
     Table,
     Tabled
 };
-use tokio_postgres::{Client as AsyncClient};
+use sqlx::PgConnection;
+use sqlx::Connection;
 use rand::{distributions::Alphanumeric, Rng, seq::SliceRandom};
-use rust_decimal::prelude::*;
 
 use super::benchmark::{
     Benchmark,
@@ -436,16 +436,16 @@ impl TPCC {
     }
 
     // The Delivery business transaction
-    pub async fn delivery(client: &mut AsyncClient, warehouse_id :i32, _min_id :u32, _max_id :u32) -> Result<u128, Box<dyn std::error::Error>> {
+    pub async fn delivery(conn: &mut PgConnection, warehouse_id :i32, _min_id :u32, _max_id :u32) -> Result<u128, Box<dyn std::error::Error>> {
         let start = Instant::now();
 
         let carrier_id :i32 = rand::thread_rng()
             .gen_range(1..=10);
 
-        let transaction = client.transaction().await?;
+        let mut transaction = conn.begin().await?;
 
         for district_id in 1..=10 {
-            let rows = transaction.query(r"
+            let row: (i32,) = sqlx::query_as(r"
                 SELECT no_o_id
                 FROM new_order
                 WHERE
@@ -453,74 +453,93 @@ impl TPCC {
                     AND no_d_id = $2
                 ORDER BY no_o_id ASC
                 LIMIT 1
-                ", &[&warehouse_id, &district_id]).await?;
-            if rows.len() > 0 {
-                let order_id: i32 = rows[0].get("no_o_id");
+                ")
+                .bind(&warehouse_id)
+                .bind(&district_id)
+                .fetch_one(&mut transaction)
+                .await?;
 
-                transaction.query(r"
-                    DELETE FROM new_order
-                    WHERE
-                        no_o_id = $1
-                        AND no_w_id = $2
-                        AND no_d_id = $3
-                ", &[&order_id, &warehouse_id, &district_id]).await?;
+            let order_id: i32 = row.0;
 
-                let row_orders = transaction.query(r"
-                    UPDATE orders
-                    SET
-                        o_carrier_id = $1
-                    WHERE
-                        o_id = $2
-                        AND o_w_id = $3
-                        AND o_d_id = $4
-                    RETURNING o_c_id
-                ", &[&carrier_id, &order_id, &warehouse_id, &district_id]).await?;
+            sqlx::query(r"
+                DELETE FROM new_order
+                WHERE
+                    no_o_id = $1
+                    AND no_w_id = $2
+                    AND no_d_id = $3
+                ")
+                .bind(&order_id)
+                .bind(&warehouse_id)
+                .bind(&district_id)
+                .execute(&mut transaction)
+                .await?;
 
-                if row_orders.len() == 0 {
-                    transaction.rollback().await?;
-                    return Err(Box::new(TPCCError("Delivery transaction rollbacked. Order not found.".into())));
-                }
+            let row_orders: (i32,) = sqlx::query_as(r"
+                UPDATE orders
+                SET
+                    o_carrier_id = $1
+                WHERE
+                    o_id = $2
+                    AND o_w_id = $3
+                    AND o_d_id = $4
+                RETURNING o_c_id
+                ")
+                .bind(&carrier_id)
+                .bind(&order_id)
+                .bind(&warehouse_id)
+                .bind(&district_id)
+                .fetch_one(&mut transaction)
+                .await?;
 
-                let customer_id: i32 = row_orders[0].get("o_c_id");
+            let customer_id: i32 = row_orders.0;
 
-                transaction.query(r"
-                    UPDATE order_line
-                    SET
-                        ol_delivery_d = current_timestamp
-                    WHERE
-                        ol_o_id = $1
-                        AND ol_w_id = $2
-                        AND ol_d_id = $3
-                ", &[&order_id, &warehouse_id, &district_id]).await?;
+            sqlx::query(r"
+                UPDATE order_line
+                SET
+                    ol_delivery_d = current_timestamp
+                WHERE
+                    ol_o_id = $1
+                    AND ol_w_id = $2
+                    AND ol_d_id = $3
+                ")
+                .bind(&order_id)
+                .bind(&warehouse_id)
+                .bind(&district_id)
+                .execute(&mut transaction)
+                .await?;
 
-                let row_amount = transaction.query(r"
-                    SELECT SUM(ol_amount * ol_quantity) AS total_ol_amount
-                    FROM order_line
-                    WHERE
-                        ol_o_id = $1
-                        AND ol_w_id = $2
-                        AND ol_d_id = $3
-                ", &[&order_id, &warehouse_id, &district_id]).await?;
+            let row_amount: (f64,)= sqlx::query_as(r"
+                SELECT SUM(ol_amount * ol_quantity) AS total_ol_amount
+                FROM order_line
+                WHERE
+                    ol_o_id = $1
+                    AND ol_w_id = $2
+                    AND ol_d_id = $3
+                ")
+                .bind(&order_id)
+                .bind(&warehouse_id)
+                .bind(&district_id)
+                .fetch_one(&mut transaction)
+                .await?;
 
-                if row_amount.len() == 0 {
-                    transaction.rollback().await?;
-                    return Err(Box::new(TPCCError("Delivery transaction rollbacked. Order-line items not found.".into())));
-                }
+            let total_ol_amount :f64 = row_amount.0;
 
-                let total_ol_amount :f64 = row_amount[0].get("total_ol_amount");
-                let total_ol_amount_dec :Decimal = Decimal::from_f64(total_ol_amount).unwrap();
-
-                transaction.query(r"
-                    UPDATE customer
-                    SET
-                        c_delivery_cnt = c_delivery_cnt + 1,
-                        c_balance = c_balance + $1
-                    WHERE
-                        c_id = $2
-                        AND c_w_id = $3
-                        AND c_d_id = $4;
-                ", &[&total_ol_amount_dec, &customer_id, &warehouse_id, &district_id]).await?;
-            }
+            sqlx::query(r"
+                UPDATE customer
+                SET
+                    c_delivery_cnt = c_delivery_cnt + 1,
+                    c_balance = c_balance + $1
+                WHERE
+                    c_id = $2
+                    AND c_w_id = $3
+                    AND c_d_id = $4;
+                ")
+                .bind(&total_ol_amount)
+                .bind(&customer_id)
+                .bind(&warehouse_id)
+                .bind(&district_id)
+                .execute(&mut transaction)
+                .await?;
         }
         transaction.commit().await?;
 
@@ -528,7 +547,7 @@ impl TPCC {
     }
 
     // The New-Order business transaction
-    pub async fn new_order(client: &mut AsyncClient, warehouse_id :i32, min_id :u32, max_id :u32) -> Result<u128, Box<dyn std::error::Error>> {
+    pub async fn new_order(conn: &mut PgConnection, warehouse_id :i32, min_id :u32, max_id :u32) -> Result<u128, Box<dyn std::error::Error>> {
         let district_id :i32 = rand::thread_rng()
             .gen_range(1..=10);
         let customer_id :i32 = rand::thread_rng()
@@ -587,55 +606,78 @@ impl TPCC {
 
         // Starting database transaction
         let start = Instant::now();
-        let transaction = client.transaction().await?;
+        let mut transaction = conn.begin().await?;
 
-        transaction.query(r"
+        sqlx::query(r"
             SELECT w_tax FROM warehouse WHERE w_id = $1
-        ", &[&warehouse_id]).await?;
+            ")
+            .bind(&warehouse_id)
+            .execute(&mut transaction)
+            .await?;
 
-        let row_district = transaction.query(r"
+        let row_district: (f32, i32,) = sqlx::query_as(r"
              UPDATE district
              SET d_next_o_id = d_next_o_id + 1
              WHERE
                 d_w_id = $1
                 AND d_id = $2
             RETURNING d_tax, d_next_o_id AS o_id
-        ", &[&warehouse_id, &district_id]).await?;
+            ")
+            .bind(&warehouse_id)
+            .bind(&district_id)
+            .fetch_one(&mut transaction)
+            .await?;
 
-        if row_district.len() == 0 {
-            transaction.rollback().await?;
-            return Err(Box::new(TPCCError("New-order transaction rollbacked. District not found.".into())));
-        }
-
-        let mut o_id :i32 = row_district[0].get("o_id");
+        let mut o_id :i32 = row_district.1;
         o_id -= 1;
 
-        transaction.query(r"
+        sqlx::query(r"
             SELECT c_discount, c_last, c_credit
             FROM customer
             WHERE
                 c_w_id = $1
                 AND c_d_id = $2
                 AND c_id = $3
-        ", &[&warehouse_id, &district_id, &customer_id]).await?;
+            ")
+            .bind(&warehouse_id)
+            .bind(&district_id)
+            .bind(&customer_id)
+            .execute(&mut transaction)
+            .await?;
 
         // Inserting one new row into orders and new_order
-        transaction.query(r"
+        sqlx::query(r"
             INSERT INTO orders (o_id, o_d_id, o_w_id, o_c_id, o_entry_d, o_ol_cnt, o_all_local)
             VALUES ($1, $2, $3, $4, NOW(), $5, $6)
-        ", &[&o_id, &district_id, &warehouse_id, &customer_id, &ol_cnt, &ol_all_local]).await?;
+            ")
+            .bind(&o_id)
+            .bind(&district_id)
+            .bind(&warehouse_id)
+            .bind(&customer_id)
+            .bind(&ol_cnt)
+            .bind(&ol_all_local)
+            .execute(&mut transaction)
+            .await?;
 
-        transaction.query(r"
+        sqlx::query(r"
             INSERT INTO new_order (no_o_id, no_d_id, no_w_id)
             VALUES ($1, $2, $3)
-        ", &[&o_id, &district_id, &warehouse_id]).await?;
+            ")
+            .bind(&o_id)
+            .bind(&district_id)
+            .bind(&warehouse_id)
+            .execute(&mut transaction)
+            .await?;
 
         let stock_query = format!("SELECT s_quantity, s_dist_{:0>2} AS s_dist, s_data FROM stock WHERE s_i_id = $1 AND s_w_id = $2", district_id);
 
         for (ol_number, ol_supply_w_id, ol_quantity, ol_i_id) in order_line_data {
-            let row_item = transaction.query(r"
+            let row_item: Vec<(f32, String, String)> = sqlx::query_as(r"
                 SELECT i_price, i_name, i_data FROM item WHERE i_id = $1
-            ", &[&ol_i_id]).await?;
+            ")
+            .bind(&ol_i_id)
+            .fetch_all(&mut transaction)
+            .await?;
 
             if row_item.len() == 0 {
                 // Item not found then we must rollback the transaction
@@ -643,13 +685,18 @@ impl TPCC {
                 return Err(Box::new(TPCCError("New-order transaction rollbacked. Item not found.".into())));
             }
 
-            let i_price :f32 = row_item[0].get("i_price");
+            let i_price :f32 = row_item[0].0;
             let ol_amount :f32 = i_price * ol_quantity as f32;
 
             // Execute stock query
-            let row_stock = transaction.query(&stock_query, &[&ol_i_id, &ol_supply_w_id]).await?;
-            let mut s_quantity :i32 = row_stock[0].get("s_quantity");
-            let s_dist :String = row_stock[0].get("s_dist");
+            let row_stock :(i32, String, String) = sqlx::query_as(&stock_query)
+                .bind(&ol_i_id)
+                .bind(&ol_supply_w_id)
+                .fetch_one(&mut transaction)
+                .await?;
+
+            let mut s_quantity :i32 = row_stock.0;
+            let s_dist :String = row_stock.1;
 
             // Update stock
             if (s_quantity - ol_quantity) > 10 {
@@ -662,28 +709,44 @@ impl TPCC {
             if ol_supply_w_id != warehouse_id {
                 s_remote_cnt_inc = 1.0;
             }
-            let ol_quantity_dec = Decimal::from_i32(ol_quantity).unwrap();
-            transaction.query(r"
+            sqlx::query(r"
                 UPDATE stock SET
                     s_quantity = $3,
-                    s_ytd = s_ytd + $4,
+                    s_ytd = s_ytd + $4::FLOAT,
                     s_order_cnt = s_order_cnt + 1,
                     s_remote_cnt = s_remote_cnt + $5
                 WHERE
                     s_i_id = $1
                     AND s_w_id = $2
-            ", &[&ol_i_id, &ol_supply_w_id, &s_quantity, &ol_quantity_dec, &s_remote_cnt_inc]).await?;
+                ")
+                .bind(&ol_i_id)
+                .bind(&ol_supply_w_id)
+                .bind(&s_quantity)
+                .bind(&ol_quantity)
+                .bind(&s_remote_cnt_inc)
+                .execute(&mut transaction)
+                .await?;
 
             // Insert into order_line
-            transaction.query(r"
+            sqlx::query(r"
                 INSERT INTO order_line (
                     ol_o_id, ol_d_id, ol_w_id, ol_number, ol_i_id, ol_supply_w_id, ol_quantity,
                     ol_amount, ol_dist_info
                 ) VALUES (
                     $1, $2, $3, $4, $5, $6, $7, $8, $9
                 )
-            ", &[&o_id, &district_id, &warehouse_id, &ol_number, &ol_i_id, &ol_supply_w_id,
-                 &ol_quantity, &ol_amount, &s_dist]).await?;
+                ")
+                .bind(&o_id)
+                .bind(&district_id)
+                .bind(&warehouse_id)
+                .bind(&ol_number)
+                .bind(&ol_i_id)
+                .bind(&ol_supply_w_id)
+                .bind(&ol_quantity)
+                .bind(&ol_amount)
+                .bind(&s_dist)
+                .execute(&mut transaction)
+                .await?;
         }
 
         transaction.commit().await?;
@@ -692,7 +755,7 @@ impl TPCC {
     }
 
     // The Payment business transaction
-    pub async fn payment(client: &mut AsyncClient, warehouse_id :i32, min_id :u32, max_id :u32) -> Result<u128, Box<dyn std::error::Error>> {
+    pub async fn payment(conn: &mut PgConnection, warehouse_id :i32, min_id :u32, max_id :u32) -> Result<u128, Box<dyn std::error::Error>> {
         let x :u8 = rand::thread_rng()
             .gen_range(1..=100);
         let y :u8 = rand::thread_rng()
@@ -736,48 +799,50 @@ impl TPCC {
         }
         let h_amount :f32 = rand::thread_rng()
             .gen_range(1.00..=5_000.00);
-        let h_amount_dec :Decimal = Decimal::from_f32(h_amount).unwrap();
-
 
         let start = Instant::now();
-        let transaction = client.transaction().await?;
+        let mut transaction = conn.begin().await?;
 
-        let row_warehouse = transaction.query(r"
+        let row_warehouse: (String,) = sqlx::query_as(r"
             UPDATE warehouse
-            SET w_ytd = w_ytd + $1
+            SET w_ytd = w_ytd + $1::FLOAT
             WHERE w_id = $2
-            RETURNING w_name, w_street_1, w_street_2, w_city, w_state, w_zip
-        ", &[&h_amount_dec, &warehouse_id]).await?;
+            RETURNING w_name
+            ")
+            .bind(&h_amount)
+            .bind(&warehouse_id)
+            .fetch_one(&mut transaction)
+            .await?;
 
-        if row_warehouse.len() == 0 {
-            transaction.rollback().await?;
-            return Err(Box::new(TPCCError("Payment transaction rollbacked. Warehouse not found.".into())));
-        }
+        let w_name: String = row_warehouse.0;
 
-        let w_name: String = row_warehouse[0].get("w_name");
-
-        let row_district = transaction.query(r"
+        let row_district: (String,) = sqlx::query_as(r"
             UPDATE district
-            SET d_ytd = d_ytd + $1
+            SET d_ytd = d_ytd + $1::FLOAT
             WHERE
                 d_w_id = $2
                 AND d_id = $3
-            RETURNING d_name, d_street_1, d_street_2, d_city, d_state, d_zip
-        ", &[&h_amount_dec, &warehouse_id, &district_id]).await?;
+            RETURNING d_name
+            ")
+            .bind(&h_amount)
+            .bind(&warehouse_id)
+            .bind(&district_id)
+            .fetch_one(&mut transaction)
+            .await?;
 
-        if row_district.len() == 0 {
-            transaction.rollback().await?;
-            return Err(Box::new(TPCCError("Payment transaction rollbacked. District not found.".into())));
-        }
-
-        let d_name: String = row_district[0].get("d_name");
+        let d_name: String = row_district.0;
 
         if y <= 60 {
-            let row_c_id = transaction.query(r"
+            let row_c_id: Vec<(i32,)> = sqlx::query_as(r"
                 SELECT c_id FROM customer
                 WHERE c_w_id = $1 AND c_d_id = $2 AND c_last = $3
                 ORDER BY c_first ASC
-            ", &[&c_w_id, &c_d_id, &c_last]).await?;
+                ")
+                .bind(&c_w_id)
+                .bind(&c_d_id)
+                .bind(&c_last)
+                .fetch_all(&mut transaction)
+                .await?;
 
             if row_c_id.len() == 0 {
                 transaction.rollback().await?;
@@ -785,56 +850,77 @@ impl TPCC {
             }
 
             let n = row_c_id.len();
-            c_id = row_c_id[n / 2].get("c_id");
+            c_id = row_c_id[n / 2].0;
         }
 
-        let row_customer = transaction.query(r"
+        let row_customer: (String,) = sqlx::query_as(r"
             SELECT
-                c_id, c_first, c_middle, c_street_1, c_street_2,
-                c_city, c_state, c_zip, c_phone, c_since,
-                c_credit, c_credit_lim, c_discount, c_balance
+                c_credit
             FROM customer
             WHERE
                 c_w_id = $1
                 AND c_d_id = $2
                 AND c_id = $3
-        ", &[&c_w_id, &c_d_id, &c_id]).await?;
+            ")
+            .bind(&c_w_id)
+            .bind(&c_d_id)
+            .bind(&c_id)
+            .fetch_one(&mut transaction)
+            .await?;
 
-        if row_customer.len() == 0 {
-            transaction.rollback().await?;
-            return Err(Box::new(TPCCError("Payment transaction rollbacked. Customer not found.".into())));
-        }
-
-        let c_credit: String = row_customer[0].get("c_credit");
+        let c_credit: String = row_customer.0;
 
         if c_credit == "BC".to_string() {
-            let pre_c_data = format!("{} {} {} {} {} {}", c_id, c_d_id, c_w_id, district_id, warehouse_id, h_amount_dec);
-            transaction.query(r"
+            let pre_c_data = format!("{} {} {} {} {} {}", c_id, c_d_id, c_w_id, district_id, warehouse_id, h_amount);
+            sqlx::query(r"
                 UPDATE customer
                 SET
-                    c_balance = c_balance - $1,
+                    c_balance = c_balance - $1::FLOAT,
                     c_ytd_payment = c_ytd_payment + 1,
                     c_data = substring($5||' '||c_data, 1, 500)
                 WHERE
                     c_id = $2 AND c_d_id = $3 AND c_w_id = $4
-            ", &[&h_amount_dec, &c_id, &c_d_id, &c_w_id, &pre_c_data]).await?;
+            ")
+            .bind(&h_amount)
+            .bind(&c_id)
+            .bind(&c_d_id)
+            .bind(&c_w_id)
+            .bind(&pre_c_data)
+            .execute(&mut transaction)
+            .await?;
         }
         else {
-            transaction.query(r"
+            sqlx::query(r"
                 UPDATE customer
                 SET
-                    c_balance = c_balance - $1,
+                    c_balance = c_balance - $1::FLOAT,
                     c_ytd_payment = c_ytd_payment + 1
                 WHERE
                     c_id = $2 AND c_d_id = $3 AND c_w_id = $4
-            ", &[&h_amount_dec, &c_id, &c_d_id, &c_w_id]).await?;
+            ")
+            .bind(&h_amount)
+            .bind(&c_id)
+            .bind(&c_d_id)
+            .bind(&c_w_id)
+            .execute(&mut transaction)
+            .await?;
         }
-        transaction.query(r"
+        sqlx::query(r"
             INSERT INTO history
                 (h_c_id, h_c_d_id, h_c_w_id, h_d_id, h_w_id, h_date, h_amount, h_data)
             VALUES
                 ($1, $2, $3, $4, $5, NOW(), $6, substring($7||'    '||$8, 1, 24))
-        ", &[&c_id, &c_d_id, &c_w_id, &district_id, &warehouse_id, &h_amount, &w_name, &d_name]).await?;
+            ")
+            .bind(&c_id)
+            .bind(&c_d_id)
+            .bind(&c_w_id)
+            .bind(&district_id)
+            .bind(&warehouse_id)
+            .bind(&h_amount)
+            .bind(&w_name)
+            .bind(&d_name)
+            .execute(&mut transaction)
+            .await?;
 
         transaction.commit().await?;
 
@@ -842,7 +928,7 @@ impl TPCC {
     }
 
     // The Order-Status business transaction
-    pub async fn order_status(client: &mut AsyncClient, warehouse_id :i32, _min_id :u32, _max_id :u32) -> Result<u128, Box<dyn std::error::Error>> {
+    pub async fn order_status(conn: &mut PgConnection, warehouse_id :i32, _min_id :u32, _max_id :u32) -> Result<u128, Box<dyn std::error::Error>> {
         let y :u8 = rand::thread_rng()
             .gen_range(1..=100);
 
@@ -860,25 +946,30 @@ impl TPCC {
         }
 
         let start = Instant::now();
-        let transaction = client.transaction().await?;
+        let mut transaction = conn.begin().await?;
 
         if y <= 60 {
-            let row_c_id = transaction.query(r"
+            let row_c_id: Vec<(i32,)> = sqlx::query_as(r"
                 SELECT c_id FROM customer
                 WHERE c_w_id = $1 AND c_d_id = $2 AND c_last = $3
                 ORDER BY c_first ASC
-            ", &[&warehouse_id, &district_id, &c_last]).await?;
+                ")
+                .bind(&warehouse_id)
+                .bind(&district_id)
+                .bind(&c_last)
+                .fetch_all(&mut transaction)
+                .await?;
 
             if row_c_id.len() == 0 {
                 transaction.rollback().await?;
-                return Err(Box::new(TPCCError("Order-Status transaction rollbacked. Customer not found (c_last).".into())));
+                return Err(Box::new(TPCCError("Payment transaction rollbacked. Customer not found (c_last).".into())));
             }
 
             let n = row_c_id.len();
-            c_id = row_c_id[n / 2].get("c_id");
+            c_id = row_c_id[n / 2].0;
         }
 
-        transaction.query(r"
+        sqlx::query(r"
             SELECT
                 c_balance, c_first, c_middle, c_last
             FROM customer
@@ -886,27 +977,32 @@ impl TPCC {
                 c_w_id = $1
                 AND c_d_id = $2
                 AND c_id = $3
-        ", &[&warehouse_id, &district_id, &c_id]).await?;
+            ")
+            .bind(&warehouse_id)
+            .bind(&district_id)
+            .bind(&c_id)
+            .execute(&mut transaction)
+            .await?;
 
-        let row_order = transaction.query(r"
+        let row_order: (i32,) = sqlx::query_as(r"
             SELECT
-                o_id, o_w_id, o_d_id, o_entry_d, o_carrier_id
+                o_id
             FROM orders
             WHERE
                 o_w_id = $1
                 AND o_d_id = $2
                 AND o_c_id = $3
             ORDER BY o_entry_d DESC LIMIT 1
-        ", &[&warehouse_id, &district_id, &c_id]).await?;
+            ")
+            .bind(&warehouse_id)
+            .bind(&district_id)
+            .bind(&c_id)
+            .fetch_one(&mut transaction)
+            .await?;
 
-        if row_order.len() == 0 {
-            transaction.rollback().await?;
-            return Err(Box::new(TPCCError("Order-Status transaction rollbacked. Order not found.".into())));
-        }
+        let o_id :i32 = row_order.0;
 
-        let o_id :i32 = row_order[0].get("o_id");
-
-        transaction.query(r"
+        sqlx::query(r"
             SELECT
                 ol_i_id, ol_supply_w_id, ol_quantity, ol_amount, ol_delivery_d
             FROM order_line
@@ -914,35 +1010,39 @@ impl TPCC {
                 ol_w_id = $1
                 AND ol_d_id = $2
                 AND ol_o_id = $3
-        ", &[&warehouse_id, &district_id, &o_id]).await?;
+            ")
+            .bind(&warehouse_id)
+            .bind(&district_id)
+            .bind(&o_id)
+            .execute(&mut transaction)
+            .await?;
 
         transaction.commit().await?;
         Ok(start.elapsed().as_micros())
     }
 
-    pub async fn stock_level(client: &mut AsyncClient, warehouse_id :i32, _min_id :u32, _max_id :u32) -> Result<u128, Box<dyn std::error::Error>> {
+    pub async fn stock_level(conn: &mut PgConnection, warehouse_id :i32, _min_id :u32, _max_id :u32) -> Result<u128, Box<dyn std::error::Error>> {
         let district_id :i32 = rand::thread_rng()
             .gen_range(1..=10);
         let threshold :i32 = rand::thread_rng()
             .gen_range(10..=20);
 
         let start = Instant::now();
-        let transaction = client.transaction().await?;
+        let mut transaction = conn.begin().await?;
 
-        let row_district = transaction.query(r"
+        let row_district: (i32,) = sqlx::query_as(r"
             SELECT d_next_o_id
             FROM district
             WHERE d_w_id = $1 AND d_id = $2
-        ", &[&warehouse_id, &district_id]).await?;
+            ")
+            .bind(&warehouse_id)
+            .bind(&district_id)
+            .fetch_one(&mut transaction)
+            .await?;
 
-        if row_district.len() == 0 {
-            transaction.rollback().await?;
-            return Err(Box::new(TPCCError("Stock-Level transaction rollbacked. District not found.".into())));
-        }
+        let d_next_o_id :i32 = row_district.0;
 
-        let d_next_o_id :i32 = row_district[0].get("d_next_o_id");
-
-        let rows_order_line = transaction.query(r"
+        let rows_order_line: Vec<(i32,)> = sqlx::query_as(r"
             SELECT
                 DISTINCT ol_i_id
             FROM order_line
@@ -951,18 +1051,28 @@ impl TPCC {
                 AND ol_d_id = $2
                 AND ol_o_id < $3
                 AND ol_o_id >= ($3 - 20)
-        ", &[&warehouse_id, &district_id, &d_next_o_id]).await?;
+            ")
+            .bind(&warehouse_id)
+            .bind(&district_id)
+            .bind(&d_next_o_id)
+            .fetch_all(&mut transaction)
+            .await?;
 
         for row in rows_order_line {
-            let ol_i_id :i32 = row.get("ol_i_id");
-            transaction.query(r"
+            let ol_i_id :i32 = row.0;
+            sqlx::query(r"
                 SELECT s_quantity
                 FROM stock
                 WHERE
                     s_w_id = $1
                     AND s_i_id = $2
                     AND s_quantity < $3
-            ", &[&warehouse_id, &ol_i_id, &threshold]).await?;
+            ")
+            .bind(&warehouse_id)
+            .bind(&ol_i_id)
+            .bind(&threshold)
+            .execute(&mut transaction)
+            .await?;
         }
 
         transaction.commit().await?;
@@ -1564,7 +1674,7 @@ impl TPCC {
 
 #[async_trait]
 impl ReadWrite for TPCC {
-    async fn execute_rw_transaction(&self, client :&mut AsyncClient, transaction :&BenchmarkTransaction) -> Result<u128, Box<dyn std::error::Error>> {
+    async fn execute_rw_transaction(&self, conn :&mut PgConnection, transaction :&BenchmarkTransaction) -> Result<u128, Box<dyn std::error::Error>> {
         // Generate the warehouse id we are going to hit
         // The used type is i32 because it matches with Postgres' int4 type.
         let warehouse_id :i32 = rand::thread_rng()
@@ -1572,31 +1682,31 @@ impl ReadWrite for TPCC {
 
         match transaction.id {
             1 => {
-                match TPCC::delivery(client, warehouse_id, self.min_id, self.max_id).await {
+                match TPCC::delivery(conn, warehouse_id, self.min_id, self.max_id).await {
                     Ok(duration) => return Ok(duration),
                     Err(e) => return Err(Box::new(TPCCError(e.to_string()))),
                 }
             },
             2 => {
-                match TPCC::new_order(client, warehouse_id, self.min_id, self.max_id).await {
+                match TPCC::new_order(conn, warehouse_id, self.min_id, self.max_id).await {
                     Ok(duration) => return Ok(duration),
                     Err(e) => return Err(Box::new(TPCCError(e.to_string()))),
                 }
             },
             3 => {
-                match TPCC::payment(client, warehouse_id, self.min_id, self.max_id).await {
+                match TPCC::payment(conn, warehouse_id, self.min_id, self.max_id).await {
                     Ok(duration) => return Ok(duration),
                     Err(e) => return Err(Box::new(TPCCError(e.to_string()))),
                 }
             },
             4 => {
-                match TPCC::order_status(client, warehouse_id, self.min_id, self.max_id).await {
+                match TPCC::order_status(conn, warehouse_id, self.min_id, self.max_id).await {
                     Ok(duration) => return Ok(duration),
                     Err(e) => return Err(Box::new(TPCCError(e.to_string()))),
                 }
             },
             5 => {
-                match TPCC::stock_level(client, warehouse_id, self.min_id, self.max_id).await {
+                match TPCC::stock_level(conn, warehouse_id, self.min_id, self.max_id).await {
                     Ok(duration) => return Ok(duration),
                     Err(e) => return Err(Box::new(TPCCError(e.to_string()))),
                 }

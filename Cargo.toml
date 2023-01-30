@@ -13,9 +13,8 @@ chrono = "0.4.10"
 crossbeam-channel = "0.5.6"
 urlencoding = "2.1.2"
 rand = "0.8.5"
-rust_decimal= { version = "1.27.0", features = ["serde", "db-postgres"] }
 tokio = { version = "1", features = ["full"] }
-tokio-postgres = "0.7.7"
+sqlx = { version = "0.6", features = [ "runtime-tokio-native-tls" , "postgres" ] }
 async-trait = "0.1.59"
 console = "0.15.2"
 itertools = "0.10.5"
