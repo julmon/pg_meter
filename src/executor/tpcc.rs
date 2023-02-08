@@ -97,26 +97,31 @@ impl TPCC {
                     BenchmarkTransaction {
                         id: 1,
                         weight: 4,
+                        name: "delivery".to_string(),
                         description: "The Delivery transaction".to_string(),
                     },
                     BenchmarkTransaction {
                         id: 2,
                         weight: 45,
+                        name: "new-order".to_string(),
                         description: "The New-Order transaction".to_string(),
                     },
                     BenchmarkTransaction {
                         id: 3,
                         weight: 43,
+                        name: "payment".to_string(),
                         description: "The Payment transaction".to_string(),
                     },
                     BenchmarkTransaction {
                         id: 4,
                         weight: 4,
+                        name: "order-status".to_string(),
                         description: "The Order-Status transaction".to_string(),
                     },
                     BenchmarkTransaction {
                         id: 5,
                         weight: 4,
+                        name: "stock-level".to_string(),
                         description: "The Stock-Level transaction".to_string(),
                     },
                 ]

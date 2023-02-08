@@ -10,6 +10,8 @@ use sqlx::PgConnection;
 pub struct BenchmarkTransaction {
     // Must be unique and greater than 0
     pub id: u16,
+    // Transaction name
+    pub name: String,
     // Probability of the transaction to be executed. From 0 (never) to 100 (alaways executed).
     pub weight: u16,
     // Description of the transaction, useful for the report

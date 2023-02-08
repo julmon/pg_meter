@@ -19,6 +19,7 @@ mod benchmark;
 mod txmessage;
 mod tpcc;
 mod terminal;
+mod data_agg;
 
 use benchmark::{
     Benchmark,
@@ -174,17 +175,6 @@ impl Executor {
             };
             let transactions = benchmark_client.get_transactions_rw();
 
-            /*
-            // The connection object performs the actual communication with the database,
-            // so spawn it off to run on its own.
-            tokio::spawn(async move {
-                if let Err(error) = connection.await {
-                    terminal::err_msg(format!("{}", error).as_str());
-                    std::process::exit(1);
-                }
-            });
-            */
-
             // Used for tracking client execution time
             let start = Instant::now();
             let mut transaction: &BenchmarkTransaction;
@@ -209,7 +199,7 @@ impl Executor {
                     },
                 }
                 // Break the loop if we reach the time limit
-                if start.elapsed().as_millis() >= duration_ms.into() {
+                if start.elapsed().as_millis() >= duration_ms as u128 {
                     break;
                 }
             }
@@ -598,6 +588,27 @@ impl Executor {
         let mut client = Executor::connect(self.dsn.clone());
 
         match client.batch_execute("CHECKPOINT") {
+            Ok(_) => (),
+            Err(error) => {
+                terminal::err_msg(format!("{}", error).as_str());
+                std::process::exit(1);
+            }
+        }
+
+        terminal::done_msg(start.elapsed().as_micros() as f64 / 1000 as f64);
+
+        self
+    }
+
+    pub fn aggregate_data(&mut self) -> &mut Self {
+        let start = Instant::now();
+
+        terminal::start_msg("RUN", "Aggregating data");
+
+        let transactions = self.get_benchmark(0, 0, 0)
+            .get_transactions_rw();
+
+        match data_agg::aggregate_tpcc_data("transaction.log", &transactions) {
             Ok(_) => (),
             Err(error) => {
                 terminal::err_msg(format!("{}", error).as_str());
