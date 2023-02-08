@@ -1,15 +1,15 @@
-use std::collections::HashMap;
-use std::time::Duration;
-
 use async_trait::async_trait;
 use postgres::Client;
 use sqlx::PgConnection;
+use tabled::Tabled;
 
 // Transaction specifications
 #[derive(Clone)]
 pub struct BenchmarkTransaction {
     // Must be unique and greater than 0
     pub id: u16,
+    // Transaction name
+    pub name: String,
     // Probability of the transaction to be executed. From 0 (never) to 100 (alaways executed).
     pub weight: u16,
     // Description of the transaction, useful for the report
@@ -28,17 +28,63 @@ pub struct BenchmarkStmt {
     pub sql: String,
 }
 
+#[derive(Tabled,Clone,Debug)]
+pub struct ResponseTimeStatistics {
+    #[tabled(rename = "Transaction")]
+    pub name: String,
+    #[tabled(rename = "Avg. (ms)")]
+    pub mean: f64,
+    #[tabled(rename = "Min. (ms)")]
+    pub min: f64,
+    #[tabled(rename = "Max. (ms)")]
+    pub max: f64,
+    #[tabled(rename = "Std. Dev. (ms)")]
+    pub std: f64,
+    #[tabled(rename = "95% (ms)")]
+    pub percentile_95: f64,
+    #[tabled(rename = "99% (ms)")]
+    pub percentile_99: f64,
+}
+
 // ReadWrite trait for all benchmarks implementing read/write workload
 #[async_trait]
 pub trait ReadWrite {
     async fn execute_rw_transaction(&self, conn: &mut PgConnection, transaction :&BenchmarkTransaction) -> Result<u128, Box<dyn std::error::Error>>;
 }
 
+#[derive(Tabled)]
+pub struct TransactionSummary {
+    #[tabled(rename = "Transaction")]
+    name: String,
+    #[tabled(rename = "Committed")]
+    n_commits: u64,
+    #[tabled(rename = "Errors")]
+    n_errors: u64,
+    #[tabled(rename = "Error rate (%)")]
+    error_rate: f64,
+    #[tabled(rename = "TPM")]
+    tpm: u32,
+    #[tabled(rename = "TPS")]
+    tps: u32,
+}
+
+impl TransactionSummary {
+    pub fn new(name: String, n_commits: u64, n_errors: u64, error_rate: f64, tpm: u32, tps: u32) -> TransactionSummary {
+        TransactionSummary {
+            name: name,
+            n_commits: n_commits,
+            n_errors: n_errors,
+            error_rate: error_rate,
+            tpm: tpm,
+            tps: tps,
+        }
+    }
+}
+
 pub trait Benchmark:ReadWrite {
     fn initialize_schema(&self, client: &mut Client) -> Result<u128, postgres::Error>;
     fn pre_load_data(&self, client: &mut Client) -> Result<u128, String>;
     fn load_data(&self, client: &mut Client, ids: Vec<u32>) -> Result<u128, String>;
-    fn print_results_summary(&self, counters: HashMap<u16, Counter>, duration_ms: Duration);
     fn get_default_max_id(&self, client: &mut Client) -> Result<u32, postgres::Error>;
     fn get_transactions_rw(&self) -> Vec<BenchmarkTransaction>;
     fn get_table_ddls(&self) -> Vec<BenchmarkStmt>;

@@ -10,6 +10,7 @@ fn main() {
         "run" => {
             executor::Executor::new(dsn, env.benchmark_type)
                 .run_benchmark(env.run_args)
+                .aggregate_data()
                 .print_results();
         },
         "init" => {

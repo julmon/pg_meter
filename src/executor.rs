@@ -1,11 +1,13 @@
 use std::time::{Duration, Instant};
 use std::thread::{JoinHandle, sleep};
 use std::thread;
-use std::fs::File;
+use std::fs::{File, create_dir_all};
 use std::io::{BufWriter, Write};
 use std::collections::{HashMap, BTreeMap};
+use std::env::current_dir;
+use std::path::PathBuf;
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use crossbeam_channel::{Sender, Receiver, unbounded};
 use postgres::{Client, NoTls};
 use rand::prelude::*;
@@ -19,6 +21,7 @@ mod benchmark;
 mod txmessage;
 mod tpcc;
 mod terminal;
+mod data_agg;
 
 use benchmark::{
     Benchmark,
@@ -26,6 +29,8 @@ use benchmark::{
     BenchmarkTransaction,
     Counter,
     ReadWrite,
+    ResponseTimeStatistics,
+    TransactionSummary,
 };
 use txmessage::{TXMessage, TXMessageKind};
 use super::args::{RunArgs};
@@ -36,6 +41,25 @@ pub struct Executor {
     counters: HashMap<u16, Counter>,
     rampup_time_ms: u128,
     total_time_ms: u128,
+    // Target directory used to store collected and aggregated data
+    target_dir: PathBuf,
+}
+
+const LOG_FILE: &str = "transaction.log";
+const ERROR_FILE: &str = "error.log";
+
+pub fn get_target_dir_path() -> PathBuf {
+    let current_dir = match current_dir() {
+        Ok(current_dir) => current_dir,
+        Err(error) => {
+            println!("ERROR: {}", error);
+            std::process::exit(1);
+         }
+    };
+    let now: DateTime<Utc> = Utc::now();
+    let target_dir_path = current_dir.join(format!("pgmtr-{}", now.format("%Y-%m-%dT%H:%M:%S")));
+
+    target_dir_path
 }
 
 impl Executor {
@@ -45,7 +69,8 @@ impl Executor {
             benchmark_type: benchmark_type,
             counters: HashMap::new(),
             total_time_ms: 0,
-            rampup_time_ms: 0
+            rampup_time_ms: 0,
+            target_dir: get_target_dir_path(),
         }
     }
 
@@ -63,13 +88,25 @@ impl Executor {
 
         let mut benchmark_clients = Vec::new();
 
-        // Start data collector
-        let dc_tx_counters = tx_counters.clone();
-        let data_collector = self.start_data_collector("transaction.log".to_string(), "error.log".to_string(), rx, dc_tx_counters);
         // Track total execution time in ms
         let start = Instant::now();
         let command = "RUN";
 
+        // Create the target dir
+        let message = format!("Creating the target directory {}", self.target_dir.display());
+        terminal::start_msg(command, message.as_str());
+        match create_dir_all(&self.target_dir) {
+            Ok(_) => (),
+            Err(error) => {
+                terminal::err_msg(format!("{}", error).as_str());
+                std::process::exit(1);
+            }
+        };
+        terminal::done_msg(start.elapsed().as_micros() as f64 / 1000 as f64);
+
+        // Start data collector
+        let dc_tx_counters = tx_counters.clone();
+        let data_collector = self.start_data_collector(rx, dc_tx_counters);
         // Let's find the maximum object id if --max-id is set to 0 (default behavior)
         let max_id :u32 = match args.max_id {
             0 => {
@@ -145,17 +182,6 @@ impl Executor {
         self
     }
 
-    // Prints benchmark results
-    pub fn print_results(&mut self) -> &mut Self {
-        let duration_ms = Duration::from_millis((self.total_time_ms - self.rampup_time_ms) as u64);
-        // Load the corresponding benchmark
-        let benchmark = self.get_benchmark(0, 0, 0);
-
-        benchmark.print_results_summary(self.counters.clone(), duration_ms);
-
-        self
-    }
-
     // Start a new read/write benchmark client in its own thread
     async fn start_rw_client(&mut self, duration_ms: u64, dsn: String, min_id: u32, max_id: u32, tx: Sender<TXMessage>, client_id: u32) -> tokio::task::JoinHandle<()>
     {
@@ -173,17 +199,6 @@ impl Executor {
                 }
             };
             let transactions = benchmark_client.get_transactions_rw();
-
-            /*
-            // The connection object performs the actual communication with the database,
-            // so spawn it off to run on its own.
-            tokio::spawn(async move {
-                if let Err(error) = connection.await {
-                    terminal::err_msg(format!("{}", error).as_str());
-                    std::process::exit(1);
-                }
-            });
-            */
 
             // Used for tracking client execution time
             let start = Instant::now();
@@ -209,7 +224,7 @@ impl Executor {
                     },
                 }
                 // Break the loop if we reach the time limit
-                if start.elapsed().as_millis() >= duration_ms.into() {
+                if start.elapsed().as_millis() >= duration_ms as u128 {
                     break;
                 }
             }
@@ -220,22 +235,23 @@ impl Executor {
     // informations into the log file and incrementing counters.
     // Once the data collector has received the shutdown order (message with id=0), then
     // the counters are sent back to the main process through the tx_counters channel.
-    fn start_data_collector(&mut self, log_file_path: String, error_file_path: String, rx: Receiver<TXMessage>, tx_counters: Sender<HashMap<u16, Counter>>) -> JoinHandle<()> {
+    fn start_data_collector(&mut self, rx: Receiver<TXMessage>, tx_counters: Sender<HashMap<u16, Counter>>) -> JoinHandle<()> {
+        let target_dir = self.target_dir.clone();
         thread::spawn(move || {
             // Create the file where transaction logs are written
-            let log_file = match File::create(&log_file_path) {
+            let log_file = match File::create(target_dir.join(LOG_FILE)) {
                 Ok(f) => f,
                 Err(e) => {
-                    eprintln!("ERROR: Could not create {}: {}", &log_file_path, e);
+                    eprintln!("ERROR: Could not create {}: {}", LOG_FILE, e);
                     std::process::exit(1);
                 },
             };
             let mut log_file = BufWriter::new(log_file);
             // Create the error log file
-            let error_file = match File::create(&error_file_path) {
+            let error_file = match File::create(target_dir.join(ERROR_FILE)) {
                 Ok(f) => f,
                 Err(e) => {
-                    eprintln!("ERROR: Could not create {}: {}", &error_file_path, e);
+                    eprintln!("ERROR: Could not create {}: {}", ERROR_FILE, e);
                     std::process::exit(1);
                 },
             };
@@ -606,6 +622,90 @@ impl Executor {
         }
 
         terminal::done_msg(start.elapsed().as_micros() as f64 / 1000 as f64);
+
+        self
+    }
+
+    // Perform data aggregation based on the log file
+    pub fn aggregate_data(&mut self) -> &mut Self {
+        let start = Instant::now();
+
+        terminal::start_msg("RUN", "Aggregating data");
+
+        let transactions = self.get_benchmark(0, 0, 0)
+            .get_transactions_rw();
+
+        match data_agg::aggregate_tpcc_data(LOG_FILE, &self.target_dir, &transactions) {
+            Ok(_) => (),
+            Err(error) => {
+                terminal::err_msg(format!("{}", error).as_str());
+                std::process::exit(1);
+            }
+        }
+
+        terminal::done_msg(start.elapsed().as_micros() as f64 / 1000 as f64);
+
+        self
+    }
+
+    pub fn print_results(&mut self) -> &mut Self {
+        let duration_ms = Duration::from_millis(self.total_time_ms as u64);
+        // Get transactions details
+        let transactions = self.get_benchmark(0, 0, 0)
+            .get_transactions_rw();
+        // Read statistics from the generated local files
+        let stats_map = match data_agg::get_stats(&self.target_dir, &transactions) {
+            Ok(stats_map) => stats_map,
+            Err(error) => {
+                eprintln!("ERROR: {}", error);
+                std::process::exit(1);
+            }
+        };
+
+        let mut data_stats: Vec<ResponseTimeStatistics>  = Vec::new();
+        let mut data_summary: Vec<TransactionSummary>  = Vec::new();
+
+        for transaction in transactions {
+            let stats = match stats_map.get(&transaction.id) {
+                Some(stats) => stats,
+                None => {
+                    eprintln!("ERROR: no statistics found for the transaction: {} ", transaction.name);
+                    std::process::exit(1);
+                }
+            };
+            let counters = match self.counters.get(&transaction.id) {
+                Some(counters) => counters,
+                None => {
+                    eprintln!("ERROR: no counters found for the transaction: {} ", transaction.name);
+                    std::process::exit(1);
+                }
+            };
+
+            data_stats.push(stats.clone());
+            data_summary.push(
+                TransactionSummary::new(
+                    transaction.name,
+                    // Number of commits
+                    counters.n_commits,
+                    // Number of errors
+                    counters.n_total - counters.n_commits,
+                    // Error rate
+                    (counters.n_total - counters.n_commits) as f64 / counters.n_total as f64 * 100.0,
+                    // Transactions per minute
+                    (counters.n_commits as f64 / duration_ms.as_secs() as f64 * 60.0) as u32,
+                    // Transactions per second
+                    (counters.n_commits as f64 / duration_ms.as_secs() as f64) as u32,
+                )
+            );
+        }
+
+        println!("");
+        // Print summary
+        println!("Results:");
+        data_agg::print_transactions_summary(&data_summary);
+        // Print stats
+        println!("Response times:");
+        data_agg::print_transactions_stats(&data_stats);
 
         self
     }

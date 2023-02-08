@@ -1,21 +1,11 @@
-use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
 use std::io::Write;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use async_trait::async_trait;
 use chrono::Utc;
-use itertools::Itertools;
 use postgres::Client;
-use tabled::{
-    object::{Rows, Object, Columns},
-    Alignment,
-    ModifyObject,
-    Style,
-    Table,
-    Tabled
-};
 use sqlx::PgConnection;
 use sqlx::Connection;
 use rand::{distributions::Alphanumeric, Rng, seq::SliceRandom};
@@ -24,7 +14,6 @@ use super::benchmark::{
     Benchmark,
     BenchmarkStmt,
     BenchmarkTransaction,
-    Counter,
     ReadWrite,
 };
 
@@ -47,29 +36,6 @@ pub struct TPCC {
     pub index_ddls: Vec<BenchmarkStmt>,
     // Vacuum table statememts
     pub vacuum_stmts: Vec<BenchmarkStmt>,
-}
-
-#[derive(Tabled)]
-pub struct TPCCTransactionSummary {
-    description: String,
-    n_commits: u64,
-    n_errors: u64,
-    error_rate: f64,
-    avg_response_time_ms: f64,
-    tpm_c: u32,
-}
-
-impl TPCCTransactionSummary {
-    pub fn new(description: String, n_commits: u64, n_errors: u64, error_rate: f64, avg_response_time_ms: f64, tpm_c: u32) -> TPCCTransactionSummary {
-        TPCCTransactionSummary {
-            description: description,
-            n_commits: n_commits,
-            n_errors: n_errors,
-            error_rate: error_rate,
-            avg_response_time_ms: avg_response_time_ms,
-            tpm_c: tpm_c,
-        }
-    }
 }
 
 #[derive(Debug)]
@@ -97,26 +63,31 @@ impl TPCC {
                     BenchmarkTransaction {
                         id: 1,
                         weight: 4,
+                        name: "Delivery".to_string(),
                         description: "The Delivery transaction".to_string(),
                     },
                     BenchmarkTransaction {
                         id: 2,
                         weight: 45,
+                        name: "New-Order".to_string(),
                         description: "The New-Order transaction".to_string(),
                     },
                     BenchmarkTransaction {
                         id: 3,
                         weight: 43,
+                        name: "Payment".to_string(),
                         description: "The Payment transaction".to_string(),
                     },
                     BenchmarkTransaction {
                         id: 4,
                         weight: 4,
+                        name: "Order-Status".to_string(),
                         description: "The Order-Status transaction".to_string(),
                     },
                     BenchmarkTransaction {
                         id: 5,
                         weight: 4,
+                        name: "Stock-Level".to_string(),
                         description: "The Stock-Level transaction".to_string(),
                     },
                 ]
@@ -428,17 +399,6 @@ impl TPCC {
                 ]
             ),
         }
-    }
-
-    // Returns the transaction description for a given id
-    pub fn get_transaction_description(&self, id: u16) -> String {
-        for t in &self.transactions_rw {
-            if t.id == id {
-                return t.description.clone();
-            }
-        }
-
-        "Description not found".to_string()
     }
 
     // The Delivery business transaction
@@ -1763,70 +1723,6 @@ impl Benchmark for TPCC {
             TPCC::populate_order_line(client, warehouse_id, o_entry_d.clone())?;
         }
         Ok(start.elapsed().as_micros())
-    }
-
-    fn print_results_summary(&self, counters: HashMap<u16, Counter>, duration_ms: Duration) {
-        println!("");
-        println!("Benchmark results:");
-        let mut data = Vec::new();
-        for id in counters.keys().sorted() {
-            if let Some(c) = counters.get(id) {
-                data.push(
-                    TPCCTransactionSummary::new(
-                        self.get_transaction_description(*id),
-                        (*c).n_commits,
-                        (*c).n_total - (*c).n_commits,
-                        ((*c).n_total - (*c).n_commits) as f64 / (*c).n_total as f64 * 100.0,
-                        (*c).total_duration_ms / (*c).n_commits as f64,
-                        ((*c).n_commits as f64 / duration_ms.as_secs() as f64 * 60.0) as u32
-                    )
-                );
-            }
-        }
-        let mut table = Table::from_iter(&data);
-        let style = Style::rounded();
-        table
-            .with(style)
-            .with(
-                Rows::first()
-                    .modify()
-                    .with(Alignment::center())
-            )
-            .with(
-                Columns::single(1)
-                    .not(Rows::first())
-                    .modify()
-                    .with(Alignment::right())
-            )
-            .with(
-                Columns::single(2)
-                    .not(Rows::first())
-                    .modify()
-                    .with(Alignment::right())
-            )
-            .with(
-                Columns::single(3)
-                    .not(Rows::first())
-                    .modify()
-                    .with(|s: &str| format!("{val:.*} %", 3,  val=s.parse::<f64>().unwrap()))
-                    .with(Alignment::right())
-            )
-            .with(
-                Columns::single(4)
-                    .not(Rows::first())
-                    .modify()
-                    .with(|s: &str| format!("{val:.*} ms", 3, val=s.parse::<f64>().unwrap()))
-                    .with(Alignment::right())
-            )
-            .with(
-                Columns::single(5)
-                    .not(Rows::first())
-                    .modify()
-                    .with(|s: &str| format!("{}", s.parse::<u32>().unwrap()))
-                    .with(Alignment::right())
-            );
-
-        println!("{}", table);
     }
 
     fn get_default_max_id(&self, client: &mut Client) -> Result<u32, postgres::Error> {
