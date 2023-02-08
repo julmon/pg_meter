@@ -404,21 +404,27 @@ impl TPCC {
             index_ddls: Vec::from(
                 [
                      BenchmarkStmt {
-                        sql: "CREATE INDEX i_customer_c_last ON customer (c_last)".to_string(),
+                        sql: "CREATE UNIQUE INDEX i_customer_last_first ON customer (c_w_id, c_d_id, c_last, c_first, c_id);".to_string(),
+                    },
+                    BenchmarkStmt {
+                        sql: "CREATE UNIQUE INDEX i_orders ON orders USING BTREE (o_w_id, o_d_id, o_c_id, o_id);".to_string(),
+                    },
+                    BenchmarkStmt {
+                        sql: "CREATE INDEX i_stock_quantity ON stock (s_w_id, s_i_id, s_quantity)".to_string(),
                     },
                 ]
             ),
             vacuum_stmts: Vec::from(
                 [
-                    BenchmarkStmt { sql: "VACUUM FREEZE warehouse".to_string() },
-                    BenchmarkStmt { sql: "VACUUM FREEZE district".to_string() },
-                    BenchmarkStmt { sql: "VACUUM FREEZE customer".to_string() },
-                    BenchmarkStmt { sql: "VACUUM FREEZE history".to_string() },
-                    BenchmarkStmt { sql: "VACUUM FREEZE new_order".to_string() },
-                    BenchmarkStmt { sql: "VACUUM FREEZE orders".to_string() },
-                    BenchmarkStmt { sql: "VACUUM FREEZE order_line".to_string() },
-                    BenchmarkStmt { sql: "VACUUM FREEZE item".to_string() },
-                    BenchmarkStmt { sql: "VACUUM FREEZE stock".to_string() },
+                    BenchmarkStmt { sql: "VACUUM FREEZE ANALYZE warehouse".to_string() },
+                    BenchmarkStmt { sql: "VACUUM FREEZE ANALYZE district".to_string() },
+                    BenchmarkStmt { sql: "VACUUM FREEZE ANALYZE customer".to_string() },
+                    BenchmarkStmt { sql: "VACUUM FREEZE ANALYZE history".to_string() },
+                    BenchmarkStmt { sql: "VACUUM FREEZE ANALYZE new_order".to_string() },
+                    BenchmarkStmt { sql: "VACUUM FREEZE ANALYZE orders".to_string() },
+                    BenchmarkStmt { sql: "VACUUM FREEZE ANALYZE order_line".to_string() },
+                    BenchmarkStmt { sql: "VACUUM FREEZE ANALYZE item".to_string() },
+                    BenchmarkStmt { sql: "VACUUM FREEZE ANALYZE stock".to_string() },
                 ]
             ),
         }
