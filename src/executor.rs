@@ -93,7 +93,11 @@ impl Executor {
         let command = "RUN";
 
         // Create the target dir
-        let message = format!("Creating the target directory {}", self.target_dir.display());
+        let target_dir_name = match self.target_dir.file_name() {
+            Some(dir_name) => dir_name.to_str().unwrap(),
+            None => "Should not happen",
+        };
+        let message = format!("Creating the target dir. {}", target_dir_name);
         terminal::start_msg(command, message.as_str());
         match create_dir_all(&self.target_dir) {
             Ok(_) => (),
@@ -391,9 +395,6 @@ impl Executor {
 
     // Generate benchmark data
     pub fn load_data(&mut self, scalefactor: u32, n_jobs: u32) -> &mut Self {
-        // New database connection
-        let mut client = Executor::connect(self.dsn.clone());
-
         // Load the corresponding benchmark client
         let benchmark_client = self.get_benchmark(scalefactor, 0, 0);
 
@@ -401,6 +402,9 @@ impl Executor {
         let message = "Pre-loading operations";
 
         terminal::start_msg(command, message);
+
+        // New database connection
+        let mut client = Executor::connect(self.dsn.clone());
 
         // Execute PreLoadData
         let duration_us = match benchmark_client.pre_load_data(&mut client) {
